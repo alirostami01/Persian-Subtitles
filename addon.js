@@ -1,6 +1,12 @@
+// addon.js (your main file)
+
+require('dotenv').config();
+
 const { addonBuilder, getRouter } = require('stremio-addon-sdk');
 const express = require('express');
 const cors = require('cors');
+
+// Correctly require the manifest object from its file
 const manifest = require('./manifest');
 const subtitlesHandler = require('./subtitlesHandler');
 const downloadProxy = require('./downloadProxy');
@@ -12,10 +18,8 @@ builder.defineSubtitlesHandler(subtitlesHandler);
 const app = express();
 app.use(cors());
 
-// Endpoint for downloading and unzipping subtitles
 app.get('/download/:token', downloadProxy);
 
-// Stremio addon router
 const router = getRouter(builder.getInterface());
 app.use(router);
 

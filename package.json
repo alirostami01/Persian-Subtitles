@@ -12,10 +12,13 @@
   "type": "commonjs",
   "dependencies": {
     "adm-zip": "^0.5.16",
-    "axios": "^1.11.0",
+    "axios": "1.11.0",
+    "axios-https-proxy-fix": "^0.17.1",
     "cheerio": "^1.1.2",
     "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
     "express": "^5.1.0",
+    "https-proxy-agent": "^7.0.6",
     "stremio-addon-sdk": "^1.6.10"
   }
 }
