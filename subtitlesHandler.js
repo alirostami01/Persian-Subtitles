@@ -3,7 +3,6 @@ const config = require('./config');
 
 const API_BASE_URL = 'https://api.subsource.net/api/v1';
 
-// ✅ کد صحیح زبان فارسی مستقیماً اینجا تعریف شده است
 const PERSIAN_LANG_CODE = 'farsi_persian';
 
 async function subtitlesHandler(args) {
@@ -25,7 +24,6 @@ async function subtitlesHandler(args) {
     }
 
     try {
-        // مرحله ۱: جستجوی فیلم با IMDb ID برای گرفتن movieId
         console.log(`Searching for movie with IMDb ID: ${imdbId}`);
         const searchUrl = `${API_BASE_URL}/movies/search?searchType=imdb&imdb=${imdbId}`;
         const movieSearch = await axios.get(searchUrl, { headers: API_HEADERS, timeout: config.LONG_TIMEOUT });
@@ -37,7 +35,6 @@ async function subtitlesHandler(args) {
         const movieId = movieSearch.data.data[0].movieId;
         console.log(`Found movieId: ${movieId}`);
 
-        // مرحله ۲: دریافت لیست زیرنویس‌ها فقط با کد زبان صحیح
         console.log(`Searching for subtitles with language code: "${PERSIAN_LANG_CODE}"`);
         const subtitlesUrl = `${API_BASE_URL}/subtitles?movieId=${movieId}&language=${PERSIAN_LANG_CODE}&sort=rating`;
         const subtitlesResponse = await axios.get(subtitlesUrl, { headers: API_HEADERS, timeout: config.LONG_TIMEOUT });
@@ -49,7 +46,6 @@ async function subtitlesHandler(args) {
 
         let availableSubtitles = subtitlesResponse.data.data;
 
-        // فیلتر کردن برای اپیزود مشخص در سریال‌ها
         if (type === 'series') {
             const filterPattern = `S${String(season).padStart(2, '0')}E${String(episode).padStart(2, '0')}`;
             availableSubtitles = availableSubtitles.filter(sub =>
@@ -57,7 +53,6 @@ async function subtitlesHandler(args) {
             );
         }
 
-        // مرحله ۳: تبدیل زیرنویس‌ها به فرمت مورد نیاز Stremio
         const finalSubtitles = availableSubtitles.map(sub => ({
             id: sub.subtitleId.toString(),
             url: `http://${config.SERVER_IP}:${config.PORT}/download/${sub.subtitleId}`,

@@ -6,7 +6,6 @@ const API_BASE_URL = 'https://api.subsource.net/api/v1';
 
 async function downloadProxy(req, res) {
     try {
-        // پارامتر ورودی از روت /download/:token گرفته می‌شود
         const { token } = req.params;
         if (!token) {
             return res.status(400).send('No subtitle ID provided');
