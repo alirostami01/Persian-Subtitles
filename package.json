@@ -1,18 +1,29 @@
 {
   "name": "subsource-stremio-addon",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "version": "2.0.0",
+  "description": "High-performance Persian subtitles add-on for Stremio with clustering support for handling thousands of concurrent users",
+  "main": "server.js",
   "scripts": {
+    "start": "node server.js",
+    "start:single": "node addon.js",
+    "dev": "node addon.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "stremio",
+    "addon",
+    "persian",
+    "subtitles",
+    "farsi",
+    "subsource",
+    "streaming"
+  ],
+  "author": "Ali Rostami",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
     "adm-zip": "^0.5.16",
-    "axios": "1.11.0",
+    "axios": "^1.11.0",
     "axios-https-proxy-fix": "^0.17.1",
     "cheerio": "^1.1.2",
     "cors": "^2.8.5",
@@ -20,5 +31,8 @@
     "express": "^5.1.0",
     "https-proxy-agent": "^7.0.6",
     "stremio-addon-sdk": "^1.6.10"
+  },
+  "engines": {
+    "node": ">=14.0.0"
   }
 }
