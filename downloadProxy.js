@@ -41,41 +41,23 @@ function toTimestamp(ms) {
 /**
  * Adds promotional text to subtitle content.
  * Inserts a new subtitle entry with the promo text at the specified position.
+ * Color is hardcoded to yellow.
  * 
  * @param {string} srtContent - Original SRT subtitle content
  * @param {string} promoText - Text to add
  * @param {number} durationSeconds - Duration in seconds for the promo text
  * @param {string} position - 'start' or 'end'
- * @param {string} color - Color in ASS format (&HAABBGGRR) or hex (#RRGGBB), default is yellow
  * @returns {string} - Modified SRT content with promo text
  */
-function addPromoTextToSubtitle(srtContent, promoText, durationSeconds, position, color = '#FFFF00') {
+function addPromoTextToSubtitle(srtContent, promoText, durationSeconds, position) {
     if (!promoText || !srtContent) {
         return srtContent;
     }
     
     const durationMs = durationSeconds * 1000;
     
-    // Convert hex color to ASS format (&HAABBGGRR)
-    function formatColorForASS(hexColor) {
-        if (!hexColor) return '&H00FFFF00'; // Default yellow
-        
-        // Remove # if present
-        let color = hexColor.replace('#', '');
-        
-        // If it's a 6-digit hex (RRGGBB), convert to ASS format (AABBGGRR)
-        if (color.length === 6) {
-            const r = color.substring(0, 2);
-            const g = color.substring(2, 4);
-            const b = color.substring(4, 6);
-            return `&H00${b}${g}${r}`;
-        }
-        
-        // If already in ASS format, return as is
-        return hexColor.startsWith('&H') ? hexColor : '&H00FFFF00';
-    }
-    
-    const assColor = formatColorForASS(color);
+    // Hardcoded yellow color in ASS format (&H00FFFF00)
+    const assColor = '&H00FFFF00';
     const coloredPromoText = `{\\c${assColor}}${promoText}{\\c}`;
     
     // Parse SRT into blocks
@@ -210,8 +192,7 @@ async function downloadProxy(req, res) {
                     srtContent,
                     config.SUBTITLE_PROMO_TEXT,
                     config.SUBTITLE_PROMO_DURATION,
-                    config.SUBTITLE_PROMO_POSITION,
-                    config.SUBTITLE_PROMO_COLOR
+                    config.SUBTITLE_PROMO_POSITION
                 );
                 console.log(`Added promotional text (${config.SUBTITLE_PROMO_POSITION}) to subtitle ${token}`);
             } catch (promoError) {
