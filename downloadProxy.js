@@ -46,14 +46,37 @@ function toTimestamp(ms) {
  * @param {string} promoText - Text to add
  * @param {number} durationSeconds - Duration in seconds for the promo text
  * @param {string} position - 'start' or 'end'
+ * @param {string} color - Color in ASS format (&HAABBGGRR) or hex (#RRGGBB), default is yellow
  * @returns {string} - Modified SRT content with promo text
  */
-function addPromoTextToSubtitle(srtContent, promoText, durationSeconds, position) {
+function addPromoTextToSubtitle(srtContent, promoText, durationSeconds, position, color = '#FFFF00') {
     if (!promoText || !srtContent) {
         return srtContent;
     }
     
     const durationMs = durationSeconds * 1000;
+    
+    // Convert hex color to ASS format (&HAABBGGRR)
+    function formatColorForASS(hexColor) {
+        if (!hexColor) return '&H00FFFF00'; // Default yellow
+        
+        // Remove # if present
+        let color = hexColor.replace('#', '');
+        
+        // If it's a 6-digit hex (RRGGBB), convert to ASS format (AABBGGRR)
+        if (color.length === 6) {
+            const r = color.substring(0, 2);
+            const g = color.substring(2, 4);
+            const b = color.substring(4, 6);
+            return `&H00${b}${g}${r}`;
+        }
+        
+        // If already in ASS format, return as is
+        return hexColor.startsWith('&H') ? hexColor : '&H00FFFF00';
+    }
+    
+    const assColor = formatColorForASS(color);
+    const coloredPromoText = `{\\c${assColor}}${promoText}{\\c}`;
     
     // Parse SRT into blocks
     const blocks = srtContent.split(/\n\s*\n/).filter(block => block.trim());
@@ -80,7 +103,7 @@ function addPromoTextToSubtitle(srtContent, promoText, durationSeconds, position
             const endTime = parseTimestamp(timingParts[1].trim());
             
             // Promo text appears from 0 to durationMs
-            promoBlock = `1\n00:00:00,000 --> ${toTimestamp(durationMs)}\n${promoText}`;
+            promoBlock = `1\n00:00:00,000 --> ${toTimestamp(durationMs)}\n${coloredPromoText}`;
             
             // Renumber all existing blocks
             const renumberedBlocks = blocks.map((block, index) => {
@@ -116,7 +139,7 @@ function addPromoTextToSubtitle(srtContent, promoText, durationSeconds, position
             const promoStartTime = endTime - gapMs;
             const promoEndTime = promoStartTime + durationMs;
             
-            promoBlock = `${blocks.length + 1}\n${toTimestamp(promoStartTime)} --> ${toTimestamp(promoEndTime)}\n${promoText}`;
+            promoBlock = `${blocks.length + 1}\n${toTimestamp(promoStartTime)} --> ${toTimestamp(promoEndTime)}\n${coloredPromoText}`;
             
             return blocks.join('\n\n') + '\n\n' + promoBlock;
         }
@@ -127,7 +150,7 @@ function addPromoTextToSubtitle(srtContent, promoText, durationSeconds, position
         parseTimestamp(blocks[blocks.length - 1].split('\n').find(l => l.includes('-->')).split('-->')[1].trim()) : 
         0;
     
-    promoBlock = `${blocks.length + 1}\n${toTimestamp(lastEndTime)} --> ${toTimestamp(lastEndTime + durationMs)}\n${promoText}`;
+    promoBlock = `${blocks.length + 1}\n${toTimestamp(lastEndTime)} --> ${toTimestamp(lastEndTime + durationMs)}\n${coloredPromoText}`;
     
     return blocks.join('\n\n') + '\n\n' + promoBlock;
 }
@@ -187,7 +210,8 @@ async function downloadProxy(req, res) {
                     srtContent,
                     config.SUBTITLE_PROMO_TEXT,
                     config.SUBTITLE_PROMO_DURATION,
-                    config.SUBTITLE_PROMO_POSITION
+                    config.SUBTITLE_PROMO_POSITION,
+                    config.SUBTITLE_PROMO_COLOR
                 );
                 console.log(`Added promotional text (${config.SUBTITLE_PROMO_POSITION}) to subtitle ${token}`);
             } catch (promoError) {
