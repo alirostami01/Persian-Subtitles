@@ -1,1 +1,13 @@
-Nothing needs to be added to the .gitignore file based on the provided changes, as only JavaScript source files were modified and no build artifacts, dependencies, or temporary files were detected.
+```
+# Dependencies
+node_modules/
+
+# Environment
+.env
+.env.local
+.env.*
+
+# Package lock
+package-lock.json
+node_modules/.package-lock.json
+```
