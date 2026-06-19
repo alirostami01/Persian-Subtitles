@@ -25,7 +25,6 @@ async function subtitlesHandler(args) {
     try {
         let movieId = null;
 
-        // ✅ استراتژی ترکیبی: ابتدا روش دقیق‌تر برای سریال‌ها، سپس روش عمومی
         if (type === 'series') {
             let mediaName;
             try {
@@ -47,7 +46,6 @@ async function subtitlesHandler(args) {
             }
         }
 
-        // اگر روش اول movieId را پیدا نکرد یا برای فیلم بود، از روش دوم (جستجو با IMDb ID) استفاده کن
         if (!movieId) {
             console.log("Attempt 2 (Fallback): Searching with IMDb ID directly.");
             const searchUrl = `${API_BASE_URL}/movies/search?searchType=imdb&imdb=${imdbId}`;
@@ -64,7 +62,6 @@ async function subtitlesHandler(args) {
             return Promise.resolve({ subtitles: [] });
         }
 
-        // حالا که movieId را داریم، زیرنویس‌ها را می‌گیریم
         const subtitlesUrl = `${API_BASE_URL}/subtitles?movieId=${movieId}&language=${PERSIAN_LANG_CODE}&sort=rating&limit=100`;
         const subtitlesResponse = await axios.get(subtitlesUrl, { headers: API_HEADERS });
 
@@ -75,7 +72,6 @@ async function subtitlesHandler(args) {
 
         let availableSubtitles = subtitlesResponse.data.data;
 
-        // ✅ استفاده از فیلتر هوشمند و قدرتمند شما برای سریال‌ها
         if (type === 'series') {
             const seasonNum = parseInt(season, 10);
             const episodeNum = parseInt(episode, 10);
