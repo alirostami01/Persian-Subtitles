@@ -1,5 +1,6 @@
 const axios = require('axios');
 const AdmZip = require('adm-zip');
+const iconv = require('iconv-lite');
 const config = require('./config');
 
 const API_BASE_URL = 'https://api.subsource.net/api/v1';
@@ -182,8 +183,14 @@ async function downloadProxy(req, res) {
             return res.status(404).send('No .srt file found in ZIP archive');
         }
 
-        // Extract subtitle content as string
-        let srtContent = srtEntry.getData().toString('utf-8');
+        // Extract subtitle content as string with encoding detection
+        // Persian subtitles are often encoded in Windows-1256, not UTF-8
+        let rawBuffer = srtEntry.getData();
+        let srtContent = iconv.decode(rawBuffer, 'utf-8');
+        if (srtContent.includes('\uFFFD')) {
+            srtContent = iconv.decode(rawBuffer, 'win1256');
+            console.log(`Re-encoded subtitle from Windows-1256 to UTF-8 for: ${srtEntry.entryName}`);
+        }
         
         // Add promotional text if configured
         if (config.SUBTITLE_PROMO_TEXT) {
