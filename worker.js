@@ -315,10 +315,21 @@ async function handleRequest(request, env) {
   const downloadMatch = path.match(/^\/download\/([^/]+)$/);
   if (downloadMatch) return downloadProxy(decodeURIComponent(downloadMatch[1]), env);
 
-  const subtitleMatch = path.match(/^\/(movie|series)\/([^/]+?)(?:\.json)?$/);
-  if (subtitleMatch) {
-    const type = subtitleMatch[1];
-    const id = decodeURIComponent(subtitleMatch[2]);
+  // Direct addon endpoint: /movie/:id or /series/:id
+  const directSubtitleMatch = path.match(/^\/(movie|series)\/([^/]+?)(?:\.json)?$/);
+  if (directSubtitleMatch) {
+    const type = directSubtitleMatch[1];
+    const id = decodeURIComponent(directSubtitleMatch[2]);
+    return json(await subtitlesHandler(type, id, env, url.origin));
+  }
+
+  // Standard Stremio subtitle-resource endpoint:
+  // /subtitles/movie/:id/:videoInfo.json or /subtitles/series/:id/:videoInfo.json
+  // The video metadata is not needed for SubSource lookup; only type and IMDb id matter.
+  const stremioSubtitleMatch = path.match(/^\/subtitles\/(movie|series)\/([^/]+)(?:\/.*)?$/);
+  if (stremioSubtitleMatch) {
+    const type = stremioSubtitleMatch[1];
+    const id = decodeURIComponent(stremioSubtitleMatch[2]);
     return json(await subtitlesHandler(type, id, env, url.origin));
   }
 
