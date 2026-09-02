@@ -82,6 +82,8 @@
 │       ├── logo.png                 # لوگوی ۲۵۶×۲۵۶ استفاده‌شده در manifest نسخه Worker
 │       └── subtitles-fa.png         # تصویر استاتیک اضافی (۲۰۴۸×۲۰۴۸)
 ├── config.js                        # تمام تنظیمات از env (dotenv) + مقادیر پیش‌فرض
+├── docs/
+│   └── DOCUMENTATION.md             # مستندات فنی: منطق، تابع‌ها، بدهی فنی و راهنمای تست
 ├── downloadProxy.js                 # دانلود ZIP، استخراج SRT، repair encoding، درج متن Promo
 ├── manifest.js                      # manifest افزونه (subtitles / movie+series / tt)
 ├── package.json                     # اسکریپت‌ها و وابستگی‌های Node.js
@@ -101,11 +103,12 @@
 | `subtitlesHandler.js` | پارس `id`، جستجوی Cinemeta/SubSource، فیلتر فصل/قسمت، ساخت خروجی `{ subtitles: [...] }` |
 | `downloadProxy.js` | دانلود ZIP از SubSource، استخراج اولین `.srt`، تبدیل encoding، درج بلوک Promo، پاسخ با `application/x-subrip` |
 | `server.js` | منطقی `cluster`؛ اگر `CLUSTER_ENABLED=true` بود master هست و به تعداد هسته‌ها worker می‌سازد، در غیر این صورت همان پروسه `addon.js` را require می‌کند |
+| `docs/DOCUMENTATION.md` | مستندات فنی برنامه‌نویس: معماری، مستندات تابع‌به‌تابع، الگوریتم تطبیق فصل/قسمت، جدول کامل env و فهرست ۱۲‌موردی بدهی فنی |
 | `worker.js` | مسیرهای زیر prefix `/subtitles`، retry با `AbortController`، پارسر ZIP دستی، `TextDecoder` برای UTF-8/Windows-1256، سرو asset لوگو از `env.ASSETS` |
 | `wrangler.jsonc` | `name: subsource-stremio-addon`، `main: worker.js`، `compatibility_date: 2026-09-02`، `assets.directory: ./assets/icons` با binding `ASSETS` و `run_worker_first` |
 | `.github/workflows/deploy-worker.yml` | push به `main` → `npm ci` → `wrangler deploy --dry-run` → `wrangler secret put API_KEY` → `wrangler deploy` (Wrangler نسخه `4.128.0` پین‌شده) |
 
-> پروژه در حال حاضر فایل تست، پیکربندی lint، `Dockerfile` و پوشه `docs/` **ندارد** و `LICENSE` هم در ریشه مخزن موجود نیست (مقدار `license` در `package.json` برابر `ISC` است). تنها فایل نمونه تنظیمات، `.env.example` است.
+> `docs/DOCUMENTATION.md` مستندات فنی کامل (منطق تابع‌به‌تابع، الگوریتم‌ها و بدهی فنی) را نگه می‌دارد. پروژه در حال حاضر فایل تست، پیکربندی lint و `Dockerfile` **ندارد** و `LICENSE` هم در ریشه مخزن موجود نیست (مقدار `license` در `package.json` برابر `ISC` است)؛ تنها فایل نمونه تنظیمات، `.env.example` است.
 
 ---
 
@@ -123,8 +126,8 @@
 ### ۱. دریافت کد
 
 ```bash
-git clone https://github.com/alirostami01/subsource-stremio-addon.git
-cd subsource-stremio-addon
+git clone https://github.com/alirostami01/Persian-Subtitles.git
+cd Persian-Subtitles
 ```
 
 ### ۲. نصب وابستگی‌ها
@@ -153,17 +156,17 @@ API_KEY=your-subsource-api-key
 | `PORT` | اختیاری | `7000` | پورت سرور HTTP (`app.listen` در `addon.js`) و جزء URL لینک زیرنویس |
 | `SERVER_IP` | اختیاری | `127.0.0.1` | آدرس/دامنه‌ای که در `url` هر زیرنویس نوشته می‌شود؛ در استقرار **باید** روی دامنه عمومی تنظیم شود |
 
-سه متغیر بالا تنها مقدارهایی هستند که در کد Node واقعاً مصرف می‌شوند (به‌جز `LONG_TIMEOUT`):
+سه متغیر بالا به‌علاوه `LONG_TIMEOUT` و `SUBTITLE_PROMO_*` مقدارهایی هستند که در کد Node واقعاً مصرف می‌شوند؛ فهرست کامل (همراه با تنظیمات runtime Worker) در [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md) آمده است:
 
-| متغیر | مصرف واقعی | توضیح |
-|-------|-----------|-------|
-| `LONG_TIMEOUT` | ✅ | تایم‌اوت requestها به SubSource (پیش‌فرض `60000`ms) |
-| `SUBTITLE_PROMO_TEXT` | ✅ | متن داخل زیرنویس؛ با مقدار خالی، درج متن متوقف می‌شود |
-| `SUBTITLE_PROMO_DURATION` | ✅ | مدت نمایش متن به ثانیه (پیش‌فرض `20`) |
-| `SUBTITLE_PROMO_POSITION` | ✅ | `start` یا `end` (پیش‌فرض `end`) |
-| `SHORT_TIMEOUT`، `LOG_LEVEL` | ⚠️ | در `config.js` تعریف شده‌اند اما هیچ‌جای کد خوانده نمی‌شوند |
-| `CLUSTER_ENABLED`، `WORKER_COUNT` | ✅ (فقط `npm start`) | فعال‌سازی/تعداد پروسه‌های cluster در `server.js` |
-| `RATE_LIMIT_*`، `CACHE_ENABLED`، `REDIS_URL`، `CACHE_TTL`، `MAX_FREE_SOCKETS` | ⚠️ | تعریف‌شده ولی **پیاده‌سازی نشده‌اند**؛ تغییرشان اثری ندارد (`MAX_SOCKETS` تنها مقدار مصرفی است) |
+| متغیر | پیش‌فرض | توضیح |
+|-------|---------|-------|
+| `LONG_TIMEOUT` | `60000` | تایم‌اوت requestها به SubSource (میلی‌ثانیه) |
+| `SUBTITLE_PROMO_TEXT` | متن حمایت پروژه | متن اضافه‌شده داخل زیرنویس؛ با مقدار خالی، درج متن متوقف می‌شود |
+| `SUBTITLE_PROMO_DURATION` | `20` | مدت نمایش متن به ثانیه |
+| `SUBTITLE_PROMO_POSITION` | `end` | موقعیت درج متن: `start` یا `end` |
+| `MAX_SOCKETS` | `50` | سقف اتصال‌های همزمان agentها در `apiClient.js` |
+| `CLUSTER_ENABLED` | `false` | فعال‌سازی حالت cluster (فقط با `npm start`) |
+| `WORKER_COUNT` | `0` | تعداد پروسه‌های cluster؛ `0` یعنی به تعداد هسته‌های CPU |
 
 برای Cloudflare Workers هیچ `.env` خوانده نمی‌شود؛ `API_KEY` باید به‌صورت **Worker Secret** تنظیم شود و متن Promo از `env` یا پیش‌فرض داخلی (`DEFAULT_PROMO_TEXT` در `worker.js`) می‌آید:
 
@@ -288,7 +291,7 @@ http://localhost:8787/subtitles/manifest.json
 
 > مسیرهای ضروری: `/manifest.json`, `/subtitles/...`, `/download/{id}`, `/health`
 
-⚠️ توجه مهم: در نسخه Node، لینک هر زیرنویس به‌صورت `http://${SERVER_IP}:${PORT}/download/...` ساخته می‌شود؛ یعنی **scheme همیشه `http`** است و `PORT` هم حتماً در URL می‌آید. برای سرو روی `443` پشت TLS proxy، مسیر `/download/...` را در پراکسی به پورت واقعی داخل سرور/container پاس کن و `SERVER_IP` را فقط روی نام دامنه تنظیم کن. راه‌حل تمیزتر: افزودن `https://` + حذف پورت از این URL (در بخش «مشارکت» به‌عنوان مورد آماده ذکر شده است).
+⚠️ توجه مهم: در نسخه Node، لینک هر زیرنویس به‌صورت `http://${SERVER_IP}:${PORT}/download/...` ساخته می‌شود؛ یعنی **scheme همیشه `http`** است و `PORT` هم حتماً در URL می‌آید. برای سرو روی `443` پشت TLS proxy، مسیر `/download/...` را در پراکسی به پورت واقعی داخل سرور/container پاس کن و `SERVER_IP` را فقط روی نام دامنه تنظیم کن. راه‌حل تمیزتر: ساخت URL از `x-forwarded-proto` + `Host` است که به‌عنوان بدهی فنی در بخش «مسائل شناخته‌شده» [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md) توضیح داده شده.
 
 #### نمونه Docker (خودت بساز — در مخزن `Dockerfile` وجود ندارد)
 
@@ -587,18 +590,9 @@ GET /download/:token  (downloadProxy)
 
 ## 🤝 مشارکت
 
-Pull Requestها و Issueها برای بهبود تطبیق فصل/قسمت، سازگاری با تغییرات API سابسورس، افزودن تست و بهینه‌سازی کش خوشحال‌کننده است.
+Pull Requestها و Issueها برای بهبود تطبیق فصل/قسمت، سازگاری با تغییرات API سابسورس، افزودن تست و بهبود مستندات خوشحال‌کننده است.
 
-چند مورد کوچک و آماده برای شروع مشارکت (همه از روی کد فعلی):
-
-- پیاده‌سازی واقعی rate limit و کش Redis که در `config.js` فقط تعریف شده‌اند.
-- استفاده از `SHORT_TIMEOUT` برای requestهای سبک (مثلاً Cinemeta) و `LOG_LEVEL` برای فیلتر لاگ‌ها.
-- ساخت URL زیرنویس در Node بر اساس `x-forwarded-proto`/`Host` به‌جای `SERVER_IP`/`PORT` هاردکد شده با `http`.
-- افزودن فیلد `logo` (و `background`) به `manifest.js` تا نسخه Node هم لوگو داشته باشد.
-- افزودن تست واحد برای `filterSeriesSubtitles`، `addPromoTextToSubtitle` و `parseTimestamp`.
-- هم‌رفتار کردن دو runtime در درج Promo: در `worker.js` شاخه `position: 'start'` بلوک‌ها را شماره‌گذاری مجدد نمی‌کند (در `downloadProxy.js` این کار انجام می‌شود) و اگر زیرنویس فقط یک بلوک داشته باشد، مسیر `start` عملاً بدون تغییر برمی‌گردد.
-
-پیش از تغییر منطق استخراج، `subtitlesHandler.js` (Node) و بخش‌های معادل در `worker.js` را هم‌زمان به‌روز کن؛ این دو پیاده‌سازی مستقل، یک رفتار را دارند و باید هم‌رفتار بمانند.
+قبل از تغییر منطق استخراج، بخش‌های «نقشه ماژول‌ها» و «مسائل شناخته‌شده و بدهی فنی» در [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md) را مطالعه کنید؛ چند مورد کوچک و آماده برای شروع مشارکت آنجا فهرست شده‌اند.
 
 ---
 
