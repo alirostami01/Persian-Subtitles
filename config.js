@@ -42,7 +42,7 @@ module.exports = {
     CACHE_TTL: parseInt(process.env.CACHE_TTL, 10) || 3600, // Cache TTL in seconds
     
     // Subtitle promotional text configuration
-    SUBTITLE_PROMO_TEXT: process.env.SUBTITLE_PROMO_TEXT || '❤️ 🎬با حمایت شما، توسعه افزونه ادامه پیدا می‌کند 🙏👉 helpserver.ir/x',
+    SUBTITLE_PROMO_TEXT: process.env.SUBTITLE_PROMO_TEXT || '❤️ 🎬با حمایت شما، توسعه افزونه ادامه پیدا می‌کند 🙏👉 alirostami.com/support',
     SUBTITLE_PROMO_DURATION: parseInt(process.env.SUBTITLE_PROMO_DURATION, 10) || 20, // Duration in seconds
     SUBTITLE_PROMO_POSITION: process.env.SUBTITLE_PROMO_POSITION || 'end' // 'start' or 'end'
 };
