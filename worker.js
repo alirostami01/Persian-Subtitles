@@ -210,8 +210,7 @@ function toTimestamp(ms) {
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
-  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(ms % 1000).padStart(3, '0')}`.replace(/^(\d{2}:\d{2}):/, '$1:')
-    .replace(/^(\d{2}:\d{2}:\d{2})$/, '$1,000');
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')},${String(ms % 1000).padStart(3, '0')}`;
 }
 
 function addPromoTextToSubtitle(srtContent, promoText, durationSeconds, position) {
@@ -284,7 +283,10 @@ async function downloadProxy(token, env) {
 function getManifest(origin) {
   return {
     ...manifest,
-    behaviorHints: { ...(manifest.behaviorHints || {}), configurable: false },
+    behaviorHints: {
+      ...(manifest.behaviorHints || {}),
+      configurable: false
+    },
     logo: `${origin}${PUBLIC_PREFIX}/logo.png`
   };
 }
