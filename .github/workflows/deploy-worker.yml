@@ -10,6 +10,7 @@ on:
       - 'wrangler.jsonc'
       - 'package.json'
       - 'package-lock.json'
+      - 'assets/icons/**'
       - '.github/workflows/deploy-worker.yml'
   workflow_dispatch:
 
