@@ -1,190 +1,319 @@
 # 🧩 مستندات فنی — Persian Subtitles Add-on
 
-این فایل **مستندات داخلی/فنی** پروژه است و مخاطب آن برنامه‌نویسی است که می‌خواهد منطق افزونه را تغییر دهد، باگ استخراج را رفع کند یا runtime جدیدی اضافه کند.
-راهنمای نصب، استقرار و مصرف کاربر در [README.md](../README.md) است و اینجا تکرار نمی‌شود.
+این سند **مستندات فنی/توسعه‌دهنده** پروژه است و بر اساس کد واقعی در شاخه `main` راستی‌آزمایی شده است. مخاطب آن برنامه‌نویسی است که می‌خواهد منطق افزونه را بفهمد، آن را تغییر دهد یا runtime جدیدی اضافه کند. راهنمای نصب، استقرار و مصرف کاربر در [README.md](../README.md) است.
 
-> مبنای تمام توضیحات زیر، کد نسخه فعلی مخزن است: `manifest.js` نسخه `1.0.0` با شناسه `org.alirostami.subtitles.persian`؛ `package.json` هم روی همان `1.0.0` هم‌نسخه شده است. اگر منطق را عوض کردی، همین فایل را هم به‌روز کن.
+پروژه از یک نقطه ورود ساده‌ی Node به معماری **چندماژولی** تفکیک شده تا هم روی **Node.js/Express** و هم روی **Cloudflare Workers** بدون تغییر منطق اصلی اجرا شود:
 
-## فهرست
+- هسته منطق جستجو و فراخوانی API در `subtitlesHandler.js` است.
+- لایه دانلود و استخراج `SRT` در `downloadProxy.js` قرار دارد.
+- کلاینت HTTP با retry در `apiClient.js` است.
+- manifest و پیکربندی به‌ترتیب در `manifest.js` و `config.js` هستند.
+- سرور Node (همراه با حالت Cluster) در `addon.js` و `server.js` است.
+- آداپتور Cloudflare Worker در `worker.js` است.
+- پیکربندی Worker در `wrangler.jsonc` است.
 
-1. معماری و تفاوت دو runtime — نقش هر فایل و جاهایی که Node و Worker جدا می‌شوند
-2. نقشه ماژول‌ها — exportها، مصرف‌کننده‌ها و گراف وابستگی
-3. قرارداد داده و API خارجی — شکل پاسخ SubSource/Cinemeta و خروجی افزونه
-4. مستندات تابع‌به‌تابع — امضا، شرط‌ها، لاگ‌ها و خطوط حساس هر ماژول
-5. الگوریتم تطبیق فصل/قسمت — الگوها، نرمال‌سازی و موارد ردشده
-6. الگوریتم درج متن Promo در SRT
-7. مدل خطاها و لاگ‌ها
-8. پیکربندی کامل متغیرهای محیطی — مصرف‌شده در برابر مصرف‌نشده
-9. مسائل شناخته‌شده و بدهی فنی — ۱۲ مورد مشخص و قابل شروع
-10. راهنمای تست و بازبینی تغییرات — دستورهای واقعی + جدول تست‌های واحد
-11. چک‌لیست افزودن تغییر به منطق
+> ⚠️ این پروژه هیچ فایل زیرنویس یا رسانه‌ای را میزبانی یا ذخیره نمی‌کند؛ فقط از API رسمی **SubSource** استفاده می‌کند و بنابراین وجود **کلید API** (`API_KEY`) الزامی است. مسئولیت رعایت قوانین کپی‌رایت بر عهده کاربر است.
 
 ---
 
-## ۱. معماری و تفاوت دو runtime
+## فهرست مطالب
 
-پروژه **یک منطق، دو نقطه ورود** است. هیچ هسته مشترکی به‌جز `manifest.js` وجود ندارد:
-
-| | Node (`addon.js` / `server.js`) | Cloudflare Worker (`worker.js`) |
-|---|---|---|
-| HTTP server | Express 5 + `getRouter` از `stremio-addon-sdk` | handler `fetch` + regex router دستی |
-| منطق جستجو | `subtitlesHandler.js` (ماژول جدا) | تابع `subtitlesHandler` داخل خود `worker.js` |
-| دانلود و استخراج SRT | `downloadProxy.js` + `adm-zip` + `iconv-lite` | `downloadProxy` داخل Worker با پارسر ZIP دستی |
-| retry | `apiClient.js` (axios + agent) | `fetchWithRetry` (fetch + `AbortController`) |
-| config | `config.js` ← `.env` با `dotenv` | `env` ← Worker Vars/Secrets (بدون dotenv) |
-| URL لینک زیرنویس | `http://${SERVER_IP}:${PORT}/download/{id}` | `${url.origin}/subtitles/download/{id}` |
-| پیشوند مسیرها | ریشه (`/manifest.json`, `/subtitles/...`, `/download/...`) | همه‌چیز زیر `/subtitles` |
-| لوگو در manifest | ❌ ندارد | ✅ `${origin}/subtitles/logo.png` |
-| health | `/health` با `uptime`/`memory`/`cpuLoad` | `/subtitles/health` فقط `status:ok` |
-| CORS | middleware `cors()` روی کل app | `withCors` روی پاسخ دانلود + `JSON_HEADERS` روی JSON |
-
-```text
-Stremio
-   │
-   ├─ Node ─────► addon.js ──► getRouter(builder) ──► subtitlesHandler.js
-   │                │                                      │
-   │                │                                      ├─ apiClient.js ──► SubSource / Cinemeta
-   │                │                                      └─ config.js
-   │                └─────────────────────────────────────► downloadProxy.js ──► ZIP → SRT → Promo
-   │
-   └─ Worker ───► worker.js (fetch) ──► subtitlesHandler() ──► fetchWithRetry
-                        │                     └── filterSeriesSubtitles()
-                        └────────────────────► downloadProxy() ──► extractFirstSrt() → Promo
-                                                    ▲
-                                             env.ASSETS (assets/icons)
-```
-
-**قانون طلایی:** هر تغییر رفتاری باید در **دو** پیاده‌سازی هم‌زمان اعمال شود. تنها فایل مشترک `manifest.js` است و اگر فقط یکی را عوض کنی، Node و Edge دو رفتار متفاوت پیدا می‌کنند و تست manual هم‌ارزی شکست می‌خورد.
+- [معماری و دلیل تفکیک](#معماری-و-دلیل-تفکیک)
+- [ساختار واقعی مخزن](#ساختار-واقعی-مخزن)
+- [وابستگی‌ها و اسکریپت‌ها](#وابستگیها-و-اسکریپتها)
+- [متغیرهای محیطی](#متغیرهای-محیطی)
+- [Manifest افزونه](#manifest-افزونه)
+- [کلاینت HTTP](#کلاینت-http)
+- [نقشه ماژول‌ها](#نقشه-ماژولها)
+  - [manifest.js](#manifestjs)
+  - [config.js](#configjs)
+  - [apiClient.js](#apiclientjs)
+  - [subtitlesHandler.js](#subtitleshandlerjs)
+  - [downloadProxy.js](#downloadproxyjs)
+  - [addon.js — هسته](#addonjs--هسته)
+  - [server.js — سرور کلاس](#serverjs--سرور-کلاس)
+  - [worker.js — آداپتور Cloudflare](#workerjs--آداپتور-cloudflare)
+  - [wrangler.jsonc](#wranglerjsonc)
+- [جریان پردازش درخواست](#جریان-پردازش-درخواست)
+- [تابع‌های کمکی عمومی](#تابعهای-کمکی-عمومی)
+- [لایه جستجوی ترکیبی (Hybrid) در subtitlesHandler](#لایه-جستجوی-ترکیبی-hybrid-در-subtitleshandler)
+- [الگوریتم تطبیق فصل/قسمت](#الگوریتم-تطبیق-فصلقسمت)
+- [لایه دانلود و استخراج SRT](#لایه-دانلود-و-استخراج-srt)
+- [الگوریتم درج متن Promo](#الگوریتم-درج-متن-promo)
+- [سرور Node.js و روت‌ها](#سرور-nodejs-و-روتها)
+- [Cloudflare Worker و روت‌ها](#cloudflare-worker-و-روتها)
+- [ساختار خروجی subtitle](#ساختار-خروجی-subtitle)
+- [نمونه درخواست‌ها](#نمونه-درخواستها)
+- [استقرار](#استقرار)
+- [CI/CD](#cicd)
+- [عیب‌یابی](#عیبیابی)
+- [حمایت از پروژه](#حمایت-از-پروژه)
 
 ---
 
-## ۲. نقشه ماژول‌ها
+## معماری و دلیل تفکیک
 
-| فایل | Export | مصرف‌کننده | وظیفه | خط‌های حساس |
-|------|--------|-----------|--------|-------------|
-| `manifest.js` | `module.exports = manifest` (CJS) | `addon.js`, `worker.js` | منبع حقیقت شناسه/نسخه/منابع افزونه | هیچ فیلد `logo` ندارد |
-| `config.js` | آبجکت تنظیمات (CJS) | `addon.js`, `apiClient.js`, `subtitlesHandler.js`, `downloadProxy.js`, `server.js` | خواندن env + پیش‌فرض‌ها | `dotenv.config()` در زمان import اجرا می‌شود |
-| `apiClient.js` | `{ apiRequest }` | `subtitlesHandler.js`, `downloadProxy.js` | retry + agent بدون keepAlive | `RETRYABLE_CODES`، فرمول backoff |
-| `subtitlesHandler.js` | `async (args) => { subtitles: [] }` | `addon.js` (`defineSubtitlesHandler`) | جستجو، فیلتر، ساخت URL دانلود | خط ساخت `url`، بلوک `filter` |
-| `downloadProxy.js` | `async (req, res) => void` | `addon.js` (`GET /download/:token`) | دانلود ZIP، استخراج SRT، encoding، Promo | `parseTimestamp`، `addPromoTextToSubtitle` |
-| `addon.js` | `{ app, server }` | `server.js` (require) | ساخت Express app، routeها، لاگ، shutdown | ترتیب mount کردن `getRouter` |
-| `server.js` | — (entry) | `npm start` | supervisor پروسه‌های cluster | شرط `CLUSTER_ENABLED && cluster.isMaster` |
-| `worker.js` | `{ fetch(request, env) }` (ESM default) | Wrangler | router + منطق کامل Edge | `PUBLIC_PREFIX`، پارسر ZIP، `run_worker_first` |
+نسخه‌های اولیه همه‌چیز (manifest، منطق جستجو، دانلود، سرور Express و پیکربندی) را در یک فایل نگه می‌داشتند. این ساختار باعث می‌شد:
 
-### گراف وابستگی (Node)
+1. باندل Cloudflare Workers وابستگی‌های Node-only (`express`, `adm-zip`, `iconv-lite`, `dotenv`, `cors`) را حمل کند.
+2. تست و import کردن منطق خالص بدون بالا آمدن سرور دشوار باشد.
+3. منطق در دو runtime تکرار شود و هم‌رفتاری آن‌ها سخت تضمین شود.
+
+معماری فعلی:
 
 ```text
-server.js
-   └─► addon.js
-         ├─► manifest.js
-         ├─► config.js            (dotenv)
-         ├─► subtitlesHandler.js
-         │     ├─► config.js
-         │     └─► apiClient.js ──► config.js
-         └─► downloadProxy.js
-               ├─► adm-zip, iconv-lite
-               ├─► config.js
-               └─► apiClient.js
+                     ┌────────────────────┐
+                     │     manifest.js     │  شناسه/نسخه/منابع — مشترک
+                     └─────────┬──────────┘
+                               │
+        ┌──────────────────────┼──────────────────────┐
+        │                      │                      │
+        ▼                      ▼                      ▼
+┌──────────────┐      ┌────────────────────┐   ┌─────────────────────┐
+│  server.js   │      │      addon.js      │   │      worker.js      │
+│  Cluster     │      │  Express + SDK     │   │  Cloudflare Worker  │
+│  supervisor  │◄─────│  getRouter()       │   │  prefix /subtitles  │
+└──────┬───────┘      └───┬───────┬────────┘   └──────────┬──────────┘
+       │                  │       │                       │
+       │                  ▼       ▼                       ▼
+       │           subtitlesHandler.js              (پیاده‌سازی داخلی)
+       │                  │       │                       │
+       │                  ▼       ▼                       ▼
+       │           apiClient.js ──► SubSource / Cinemeta
+       │                  │
+       │                  ▼
+       │           downloadProxy.js ──► ZIP → SRT → Promo
+       │               (adm-zip + iconv-lite)
+       │
+       └── config.js (dotenv) ── همه‌جا
 ```
 
-`worker.js` عمداً تنها `manifest.js` را require می‌کند تا هیچ وابستگی Node-only (`express`, `adm-zip`, `iconv-lite`, `axios`, `dotenv`) وارد باندل Edge نشود.
+**قانون طلایی:** `manifest.js` تنها فایل مشترک است. منطق جستجو (`subtitlesHandler`) و دانلود (`downloadProxy`) در دو نسخه‌ی Node و Worker وجود دارد. هر تغییر رفتاری باید در **هر دو** پیاده‌سازی اعمال شود تا Node و Edge هم‌رفتار بمانند.
 
 ---
 
-## ۳. قرارداد داده و API خارجی
+## ساختار واقعی مخزن
 
-### پاسخ SubSource که کد به آن تکیه می‌کند
-
-```jsonc
-// GET /movies/search → { success, data: [ { movieId, ... } ] }
-// GET /subtitles?...  → { success, data: [ { subtitleId, releaseInfo: [string, ...], ... } ] }
-```
-
-فیلدهایی که **واقعاً** خوانده می‌شوند: `success`، `data[]`، `data[].movieId`، `data[].subtitleId`، `data[].releaseInfo`.
-هیچ اعتبارسنجی دقیق روی بقیه فیلدها وجود ندارد؛ اگر `subtitleId` عدد نباشد `String(sub.subtitleId)` در Worker و `sub.subtitleId.toString()` در Node رفتار متفاوتی دارند (در Node روی `undefined` خطا می‌دهد و به `{subtitles: []}` می‌افتد).
-
-### درخواست خروجی افزونه
+خروجی `git ls-files` در شاخه اصلی:
 
 ```text
-GET https://api.subsource.net/api/v1/movies/search?searchType=text&q={name}&season={season}
-GET https://api.subsource.net/api/v1/movies/search?searchType=imdb&imdb={imdbId}
-GET https://api.subsource.net/api/v1/subtitles?movieId={id}&language=farsi_persian&sort=rating&limit=100
-GET https://api.subsource.net/api/v1/subtitles/{subtitleId}/download     → ZIP (arraybuffer)
-GET https://v3-cinemeta.strem.io/meta/series/{imdbId}.json               → { meta: { name } }
+.
+├── .env.example                   # الگوی کامل متغیرهای محیطی (کپی به .env)
+├── .github/
+│   └── workflows/
+│       └── deploy-worker.yml      # دیپلوی خودکار Worker به Cloudflare
+├── .gitignore
+├── LICENSE                        # Apache License 2.0
+├── README.md                      # راهنمای کاربر
+├── addon.js                       # سرور Node/Express + SDK builder + روت‌ها
+├── apiClient.js                   # کلاینت axios با retry و backoff
+├── assets/
+│   └── icons/
+│       ├── logo.png               # لوگوی استفاده‌شده در manifest نسخه Worker
+│       └── subtitles-fa.png       # تصویر استاتیک اضافی
+├── config.js                      # تمام تنظیمات از env (dotenv) + پیش‌فرض‌ها
+├── docs/
+│   └── DOCUMENTATION.md           # همین سند
+├── downloadProxy.js               # دانلود ZIP، استخراج SRT، repair encoding، درج Promo
+├── manifest.js                    # manifest افزونه (subtitles / movie+series / tt)
+├── package.json                   # main: server.js، اسکریپت‌ها، وابستگی‌ها
+├── package-lock.json
+├── server.js                      # راه‌انداز Cluster (main در package.json)
+├── subtitlesHandler.js            # منطق جستجو و فیلتر زیرنویس در Node
+├── worker.js                      # آداپتور Cloudflare Workers (main در wrangler.jsonc)
+└── wrangler.jsonc                 # پیکربندی Worker: assets، bindings، run_worker_first
 ```
 
-هدر احراز هویت همه‌جا: `X-API-Key` (در Worker با fallback به رشته خالی؛ اگر `API_KEY` نباشد `getMovieId` عمداً throw می‌کند).
+| مسیر | نقش |
+|------|-----|
+| `manifest.js` | تعریف `id`, `version`, `resources: ["subtitles"]`, `types: ["movie","series"]`, `idPrefixes: ["tt"]` — مشترک بین هر دو runtime |
+| `config.js` | خواندن env با `dotenv` و مقادیر پیش‌فرض (`PORT=7000`, `LONG_TIMEOUT=60000`, `MAX_SOCKETS=50`, ...) |
+| `apiClient.js` | `apiRequest()` — retry با backoff تصاعدی + jitter، agent بدون `keepAlive`، تشخیص خطای قابل‌تلاش‌مجدد |
+| `subtitlesHandler.js` | پارس `id`، جستجوی Cinemeta/SubSource، فیلتر فصل/قسمت، ساخت خروجی `{ subtitles: [...] }` |
+| `downloadProxy.js` | دانلود ZIP از SubSource، استخراج اولین `.srt`، تبدیل encoding، درج بلوک Promo |
+| `addon.js` | `new addonBuilder(manifest)` + `defineSubtitlesHandler`، ساخت اپ Express، mount `getRouter`، route `/download/:token`، `GET /health`، لاگ‌کننده و graceful shutdown |
+| `server.js` | منطق `cluster`؛ اگر `CLUSTER_ENABLED=true` بود master است و به تعداد هسته‌ها worker می‌سازد، در غیر این صورت همان پروسه `addon.js` را require می‌کند |
+| `worker.js` | مسیرهای زیر prefix `/subtitles`، retry با `AbortController`، پارسر ZIP دستی، `TextDecoder` برای UTF-8/Windows-1256، سرو asset لوگو از `env.ASSETS` |
+| `wrangler.jsonc` | `name: subsource-stremio-addon`، `main: worker.js`، `assets.directory: ./assets/icons` با binding `ASSETS` و `run_worker_first` |
+| `.github/workflows/deploy-worker.yml` | push به `main` → `npm ci` → `wrangler deploy --dry-run` → `wrangler secret put API_KEY` → `wrangler deploy` (Wrangler نسخه `4.128.0` پین‌شده) |
+| `assets/icons/logo.png` | لوگوی استفاده‌شده در manifest نسخه Worker |
+| `assets/icons/subtitles-fa.png` | تصویر استاتیک اضافی (استفاده‌ی فعال ندارد) |
 
-### پاسخ به Stremio
+---
 
-```jsonc
+## وابستگی‌ها و اسکریپت‌ها
+
+### package.json
+
+```json
 {
-  "subtitles": [
-    {
-      "id": "1234567",                       // subtitleId به رشته
-      "url": "http://HOST:PORT/download/1234567",
-      "lang": "fas",
-      "title": "WEB-DL 1080p S01E05"         // releaseInfo.join(' ')
-    }
-  ]
+  "name": "Persian Subtitles",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "start:single": "node addon.js",
+    "dev": "node addon.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "type": "commonjs",
+  "engines": { "node": ">=14.0.0" },
+  "dependencies": {
+    "adm-zip": "^0.5.16",
+    "axios": "^1.11.0",
+    "axios-https-proxy-fix": "^0.17.1",
+    "cheerio": "^1.1.2",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "https-proxy-agent": "^7.0.6",
+    "iconv-lite": "^0.7.3",
+    "stremio-addon-sdk": "^1.6.10"
+  }
 }
 ```
 
-قالب فایل تحویلی: `Content-Type: application/x-subrip; charset=utf-8` و بدنه SRT خالص (UTF-8). افزونه هیچ `behaviorHints` یا فیلد `id` منحصربه‌فرد سراسری (مثلاً hash) تولید نمی‌کند؛ `id` همان `subtitleId` سابسورس است.
+| دستور | عملکرد |
+|-------|--------|
+| `npm start` | اجرای `node server.js` (حالت Cluster اگر فعال باشد) |
+| `npm run start:single` | اجرای `node addon.js` (تک‌پروسه، بدون Cluster) |
+| `npm run dev` | اجرای `node addon.js` (تک‌پروسه) |
+
+> `npm test` عمداً خطا برمی‌گرداند؛ تست خودکار در مخزن وجود ندارد.
+
+### وابستگی‌های runtime
+
+| پکیج | کاربرد | نکته |
+|------|--------|------|
+| `stremio-addon-sdk` | `addonBuilder` و `getRouter` در `addon.js` | فقط در Node؛ در Worker استفاده نمی‌شود |
+| `express` | سرور HTTP در `addon.js` | فقط در Node |
+| `cors` | middleware CORS در `addon.js` | فقط در Node |
+| `dotenv` | خواندن `.env` در `config.js` و `addon.js` | فقط در Node |
+| `axios` | درخواست‌های `apiClient.js` (SubSource/Cinemeta) | در Worker با `fetch` جایگزین می‌شود |
+| `adm-zip` | استخراج `.srt` از ZIP در `downloadProxy.js` | فقط در Node؛ Worker پارسر Zip دستی دارد |
+| `iconv-lite` | تبدیل encoding (`utf-8` ↔ `win1256`) در `downloadProxy.js` | فقط در Node؛ Worker از `TextDecoder` استفاده می‌کند |
+| `cheerio`, `axios-https-proxy-fix`, `https-proxy-agent` | در وابستگی‌ها هستند ولی در مسیر اصلی import نمی‌شوند | — |
+
+### نسخه Node.js
+
+`package.json` نسخه `>=14.0.0` را اعلام می‌کند، اما نسخه قفل‌شده برخی پکیج‌ها (مثلاً `cheerio`) به Node `>=20.18.1` نیاز دارد. CI روی Node `22` اجرا می‌شود؛ برای توسعه لوکال Node `22` توصیه می‌شود.
 
 ---
 
-## ۴. مستندات تابع‌به‌تابع
+## متغیرهای محیطی
 
-### manifest.js
+### Node.js (config.js + addon.js)
 
-آبجکت ثابت manifest استرمیو:
-
-```js
-{
-  id: "org.alirostami.subtitles.persian",
-  version: "1.0.0",
-  name: "Persian Subtitles",
-  author: "Ali Rostami",
-  contactEmail: 'rostami.ali@gmail.com',
-  description: "Provides Persian subtitles from the SubSource API.\n\nAuthor: Ali Rostami  \nWebsite: alirostami.com/support \nGitHub: https://github.com/alirostami01/Persian-Subtitles/",
-  resources: ["subtitles"],
-  types: ["movie", "series"],
-  idPrefixes: ["tt"],
-  catalogs: []
-}
-```
-
-- `idPrefixes: ["tt"]` یعنی Stremio فقط برای محتوا با IMDb این افزونه را صدا می‌زند؛ برای سریال‌های بدون IMDb هیچ درخواستی نمی‌آید.
-- `resources: ["subtitles"]` تنها resource است؛ **catalog، meta و stream وجود ندارد**.
-- `description` عمداً چندخطی است: Stremio همین متن را در صفحه جزئیات افزونه نشان می‌دهد، پس لینک حمایت و GitHub داخل خود manifest سفر می‌کند (هر تغییر در آن = تغییر خروجی `/manifest.json`).
-- `contactEmail` بدون گیومه دوتایی نوشته شده؛ `JSON.stringify` خروجی معتبر تولید می‌کند، ولی سبک بقیه فیلدها را بهم می‌زند — یکدست‌کردنش بی‌خطر است.
-- نسخه Worker روی این آبجکت `behaviorHints.configurable: false` و `logo` را اضافه می‌کند (`getManifest(origin)`).
-
-### config.js
+`config.js` با `require('dotenv').config()` مقادیر env را در همان لحظه‌ی import می‌خواند. برای همه‌ی مقادیر عددی از `parseInt(...) || default` و برای بولین‌ها از `=== 'true'` استفاده می‌شود:
 
 ```js
 require('dotenv').config();
-module.exports = { SERVER_IP, PORT, LONG_TIMEOUT, SHORT_TIMEOUT, API_KEY, CLUSTER_ENABLED, ... };
+module.exports = {
+    SERVER_IP: process.env.SERVER_IP || '127.0.0.1',
+    PORT: parseInt(process.env.PORT, 10) || 7000,
+    LONG_TIMEOUT: parseInt(process.env.LONG_TIMEOUT, 10) || 60000,
+    SHORT_TIMEOUT: parseInt(process.env.SHORT_TIMEOUT, 10) || 15000,
+    API_KEY: process.env.API_KEY,
+    CLUSTER_ENABLED: process.env.CLUSTER_ENABLED === 'true',
+    WORKER_COUNT: parseInt(process.env.WORKER_COUNT, 10) || 0,
+    // ...
+};
 ```
 
-منطق همه‌جا یکسان است: `parseInt(process.env.X, 10) || default` برای عدد و `process.env.X === 'true'` برای بولین.
+| متغیر | پیش‌فرض | کجا مصرف می‌شود | توضیح |
+|-------|---------|------------------|-------|
+| `API_KEY` | — | `subtitlesHandler.js`, `downloadProxy.js` | کلید SubSource در هدر `X-API-Key`؛ اگر نباشد پاسخ `{ subtitles: [] }` |
+| `PORT` | `7000` | `addon.js` (`listen`), `subtitlesHandler.js` (URL) | پورت سرور و بخشی از URL لینک زیرنویس |
+| `SERVER_IP` | `127.0.0.1` | `addon.js` (لاگ نصب), `subtitlesHandler.js` (URL) | آدرس/دامنه‌ی عمومی در URL هر زیرنویس |
+| `LONG_TIMEOUT` | `60000` | `apiClient.js` (پیش‌فرض timeout), `downloadProxy.js` | تایم‌اوت درخواست‌ها به SubSource (ms) |
+| `MAX_SOCKETS` | `50` | `apiClient.js` (agentها) | سقف اتصال‌های هم‌زمان |
+| `CLUSTER_ENABLED` | `false` | `server.js` | فعال‌سازی حالت Cluster |
+| `WORKER_COUNT` | `0` (= تعداد هسته) | `server.js` | تعداد workerها در حالت Cluster |
+| `SUBTITLE_PROMO_TEXT` | متن حمایت پیش‌فرض | `downloadProxy.js` | متن اضافه‌شده داخل زیرنویس؛ رشته خالی = بدون promo |
+| `SUBTITLE_PROMO_DURATION` | `20` | `downloadProxy.js` | مدت نمایش متن (ثانیه) |
+| `SUBTITLE_PROMO_POSITION` | `end` | `downloadProxy.js` | موقعیت درج: `start` یا `end` |
+| `SHORT_TIMEOUT` | `15000` | تعریف‌شده در `config.js` | در runtime فعلی مصرف نمی‌شود |
+| `RATE_LIMIT_*`, `LOG_LEVEL`, `CACHE_*`, `REDIS_URL`, `MAX_FREE_SOCKETS` | — | تعریف‌شده در `config.js` | در runtime فعلی مصرف نمی‌شوند |
 
-- ⚠️ چون `API_KEY` از `process.env` خوانده می‌شود و `dotenv.config()` فقط یک بار در اولین require اثر دارد، هر import زودهنگام‌تر از `config.js` می‌تواند `process.env` را بدون مقادیر `.env` ببیند. `subtitlesHandler.js` و `downloadProxy.js` مستقیماً `process.env.API_KEY` را چک می‌کنند (نه `config.API_KEY`) — این تنها سازگاری‌شان با dotenv است.
-- `PORT` و `LONG_TIMEOUT` و `MAX_SOCKETS` از `config.js` مصرف می‌شوند؛ فهرست کامل و مقدارهای **مصرف‌نشده** در بخش [۸](#۸-پیکربندی-کامل-متغیرهای-محیطی) است.
+نمونه `.env`:
 
-### apiClient.js
+```env
+API_KEY=your-subsource-api-key
+PORT=7000
+SERVER_IP=127.0.0.1
+LONG_TIMEOUT=60000
+CLUSTER_ENABLED=false
+```
+
+### Cloudflare Workers (wrangler.jsonc + worker.js)
+
+در Worker هیچ `dotenv`ای وجود ندارد؛ مقادیر از `env` (Vars/Secrets) می‌آیند:
+
+| متغیر | منبع | رفتار نبودش |
+|-------|------|--------------|
+| `API_KEY` | Worker Secret (در CI با `wrangler secret put`) | `getMovieId` throw → `{ subtitles: [] }`؛ دانلود → `500` |
+| `LONG_TIMEOUT` | Var (اختیاری) | پیش‌فرض داخلی `60000ms` فقط در دانلود |
+| `SUBTITLE_PROMO_TEXT` | Var (اختیاری) | `DEFAULT_PROMO_TEXT` داخل `worker.js`؛ رشته خالی = بدون promo |
+| `SUBTITLE_PROMO_DURATION` / `_POSITION` | Var (اختیاری) | `20` / `end` |
+| `ASSETS` | binding خودکار از `wrangler.jsonc` | نبودش → `404` روی `/subtitles/logo.png` |
+
+---
+
+## Manifest افزونه
+
+در `manifest.js`:
 
 ```js
-async function apiRequest({ method='get', url, headers={}, params={}, responseType='json',
-                            timeout = config.LONG_TIMEOUT, retries = 3 })
+const manifest = {
+  "id": "org.alirostami.subtitles.persian",
+  "version": "1.0.0",
+  "name": "Persian Subtitles",
+  "author": "Ali Rostami",
+  contactEmail: 'rostami.ali@gmail.com',
+  "description": "Provides Persian subtitles from the SubSource API.\n\nAuthor: Ali Rostami  \nWebsite: alirostami.com/support \nGitHub: https://github.com/alirostami01/Persian-Subtitles/",
+  "resources": ["subtitles"],
+  "types": ["movie", "series"],
+  "idPrefixes": ["tt"],
+  "catalogs": []
+};
+module.exports = manifest;
 ```
 
-مسیر اجرا:
+| فیلد | مقدار | توضیح |
+|------|-------|-------|
+| `id` | `org.alirostami.subtitles.persian` | شناسه یکتا |
+| `version` | `1.0.0` | نسخه manifest — هم‌راستا با `package.json` |
+| `resources` | `['subtitles']` | فقط زیرنویس؛ هیچ `stream`/`catalog`/`meta` ندارد |
+| `types` | `['movie','series']` | فیلم و سریال |
+| `idPrefixes` | `['tt']` | فقط IMDb؛ برای محتوای بدون IMDb Stremio این افزونه را صدا نمی‌زند |
+| `catalogs` | `[]` | بدون catalog |
+| `logo` | ندارد | در Node Stremio آیکن پیش‌فرض نشان می‌دهد؛ نسخه Worker لوگو اضافه می‌کند |
 
-1. حلقه `for (attempt = 0; attempt <= retries; ...)` → حداکثر **۴ تلاش** (اولی + ۳ retry).
-2. `axios({ ..., httpAgent, httpsAgent, maxRedirects: 5 })`.
-3. `catch` → اگر `!isRetryable(error)` یا آخرین تلاش بود، throw؛ در غیر این‌صورت `await delay(backoff)`.
+نکاته‌ها:
+
+- `contactEmail` بدون گیومه نوشته شده؛ `JSON.stringify` خروجی معتبری می‌سازد.
+- `description` عمداً چندخطی است؛ Stremio همین متن را در صفحه‌ی جزئیات افزونه نشان می‌دهد، پس لینک حمایت و GitHub داخل خود manifest سفر می‌کند.
+- نسخه Worker روی این آبجکت `behaviorHints.configurable = false` و `logo` را اضافه می‌کند (`getManifest(origin)`).
+
+---
+
+## کلاینت HTTP
+
+در `apiClient.js`، `apiRequest` همه‌ی درخواست‌های Node را انجام می‌دهد:
+
+```js
+const httpAgent = new http.Agent({ keepAlive: false, maxSockets: config.MAX_SOCKETS });
+const httpsAgent = new https.Agent({ keepAlive: false, maxSockets: config.MAX_SOCKETS });
+
+const RETRYABLE_CODES = new Set(['ECONNRESET','ECONNABORTED','ETIMEDOUT','EPIPE','EAI_AGAIN','ENOTFOUND']);
+
+async function apiRequest({ method='get', url, headers={}, params={}, responseType='json',
+                            timeout=config.LONG_TIMEOUT, retries=3 })
+```
+
+- حلقه `for (attempt = 0; attempt <= retries; ...)` → حداکثر **۴ تلاش** (اولی + ۳ retry).
+- `axios({ ..., httpAgent, httpsAgent, maxRedirects: 5 })`.
+- `catch` → اگر `!isRetryable(error)` یا آخرین تلاش بود throw؛ در غیر این صورت `await delay(backoff)`.
 
 ```js
 const backoff = 300 * Math.pow(2, attempt) + Math.floor(Math.random() * 200);
@@ -192,18 +321,225 @@ const backoff = 300 * Math.pow(2, attempt) + Math.floor(Math.random() * 200);
 ```
 
 ```js
-RETRYABLE_CODES = { ECONNRESET, ECONNABORTED, ETIMEDOUT, EPIPE, EAI_AGAIN, ENOTFOUND }
 isRetryable(e) = (e.code ∈ RETRYABLE_CODES) || (e.response && (status === 429 || status >= 500))
 ```
 
-- `httpAgent`/`httpsAgent` با `keepAlive: false` و `maxSockets: config.MAX_SOCKETS` ساخته می‌شوند؛ هدف مشخصشان حذف socketهای مرده keep-alive است که منبع اصلی `read ECONNRESET` بودند.
-- `ENOTFOUND` قابل retry است (DNS موقت) ولی هیچ backoff برای `429` متفاوت از `5xx` نیست؛ اگر سابسورس rate-limit کند، policy یکسان است.
+- agentها `keepAlive: false` دارند تا socketهای مرده‌ی keep-alive باعث `read ECONNRESET` نشوند؛ هر درخواست یک اتصال تازه می‌گیرد.
 - خروجی: پاسخ کامل axios (`response.data`, `response.status`). صداکننده مسئول چک کردن `success` بدنه است.
+
+الگوهای مصرف زیر مستقیماً از `axios` استفاده می‌کنند (نه `apiRequest`):
+
+| محل | تنظیمات |
+|------|---------|
+| Worker | اصلاً از axios استفاده نمی‌کند؛ `fetchWithRetry` با `AbortController` |
+| Cinemeta (Node) | `apiRequest` با `url` مستقیم `v3-cinemeta.strem.io` |
+| SubSource (Node) | `apiRequest` با `url` ساختگی از `API_BASE_URL` و هدر `X-API-Key` |
+
+---
+
+## نقشه ماژول‌ها
+
+### manifest.js
+
+آبجکت ثابت manifest استرمیو (CJS). تنها فایل مشترک بین `addon.js` و `worker.js`. هیچ فیلد `logo` و هیچ وابستگی ندارد؛ تغییر آن = تغییر خروجی `/manifest.json` (Node) و `/subtitles/manifest.json` (Worker).
+
+### config.js
+
+```js
+require('dotenv').config();
+module.exports = { SERVER_IP, PORT, LONG_TIMEOUT, SHORT_TIMEOUT, API_KEY, CLUSTER_ENABLED, WORKER_COUNT, MAX_SOCKETS, SUBTITLE_PROMO_* , ... };
+```
+
+- `dotenv.config()` فقط یک بار در اولین require اثر دارد؛ هر import زودهنگام‌تر از `config.js` ممکن است `process.env` را بدون مقادیر `.env` ببیند.
+- `API_KEY` مستقیم از `process.env` خوانده می‌شود (نه `config.API_KEY`)، و کلاینت‌ها هم مستقیماً `process.env.API_KEY` را چک می‌کنند.
+
+### apiClient.js
+
+`module.exports = { apiRequest }`. مصرف‌کننده‌ها: `subtitlesHandler.js`، `downloadProxy.js`. وظیفه: retry با backoff و agent بدون keepAlive. بخش جزئیات در [کلاینت HTTP](#کلاینت-http).
 
 ### subtitlesHandler.js
 
+`module.exports = async (args) => { subtitles: [] }` — مصرف‌کننده: `addon.js` (`defineSubtitlesHandler`). هسته‌ی منطق جستجو. بخش جزئیات در [لایه جستجوی ترکیبی](#لایه-جستجوی-ترکیبی-hybrid-در-subtitleshandler).
+
+### downloadProxy.js
+
+`module.exports = async (req, res) => void` — مصرف‌کننده: `addon.js` (`GET /download/:token`). Task: دانلود ZIP، استخراج `SRT`، repair encoding، درج Promo. بخش جزئیات در [لایه دانلود و استخراج SRT](#لایه-دانلود-و-استخراج-srt).
+
+### addon.js — هسته
+
+نقطه ورود Node/Express. ترتیب mount کردن مهم است:
+
 ```js
-async function subtitlesHandler(args)   // args = { type, id, ... } از SDK
+const builder = new addonBuilder(manifest);
+builder.defineSubtitlesHandler(subtitlesHandler);
+
+const app = express();
+app.use(cors());
+app.set('trust proxy', true);
+app.disable('x-powered-by');
+app.use(requestLogger);                      // res.on('finish') → `[ISO] METHOD path - status (durationms)`
+app.get('/download/:token', downloadProxy);
+app.use(getRouter(builder.getInterface()));   // → /manifest.json و /subtitles/*
+app.get('/health', ...);
+```
+
+- `getRouter(builder.getInterface())` مسیرهای Stremio (`/manifest.json` و `/subtitles/:type/:id.json`) را می‌سازد.
+- `app.listen(config.PORT, '0.0.0.0', ...)` — bind روی همه‌ی interfaceها (برای preview/استقرار لازم است).
+- `gracefulShutdown(signal)` فقط `server.close()` را صدا می‌زند و بعد از `10000ms` با `process.exit(1)` force می‌کند؛ اگر `server` تعریف نشده باشد مستقیم `process.exit(0)`.
+- `process.on('uncaughtException' | 'unhandledRejection')` فقط لاگ می‌کنند و پروسه را نمی‌کُشند.
+- خروجی انتهایی: `module.exports = { app, server }` (برای تست‌های آینده؛ `server` در زمان export هنوز `undefined` است چون `listen` async است).
+
+### server.js — سرور کلاس
+
+```js
+const numCPUs = config.WORKER_COUNT > 0 ? config.WORKER_COUNT : os.cpus().length;
+if (config.CLUSTER_ENABLED && cluster.isMaster) { /* fork ×N */ } else { require('./addon'); }
+```
+
+- `main` در `package.json` است (`npm start` → `node server.js`).
+- در حالت master: fork به تعداد `numCPUs`، لاگ `Worker {pid} spawned` و `✓ Worker {pid} is online (k/N)`.
+- `cluster.on('exit')` → لاگ `⚠️  Worker {pid} died ...` و بعد از `1000ms` fork جدید با لاگ `🔄 New worker {pid} started`.
+- `gracefulShutdown` master: به هر worker پیام `'shutdown'` send می‌کند، بعد از `10000ms` در صورت عدم خروج `SIGKILL`، و master بعد از `15000ms` خارج می‌شود.
+- اگر `CLUSTER_ENABLED=false` باشد، `server.js` عملاً همان `addon.js` را در همان پروسه require می‌کند (بدون master).
+
+### worker.js — آداپتور Cloudflare
+
+`export default { async fetch(request, env) }`. تمام وابستگی‌های Node-only را پرهیز می‌کند و فقط `manifest.js` را require می‌کند؛ پارسر ZIP و retry را خودش پیاده‌سازی می‌کند. ساختار روت‌ها در [Cloudflare Worker و روت‌ها](#cloudflare-worker-و-روتها).
+
+### wrangler.jsonc
+
+```jsonc
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "subsource-stremio-addon",
+  "main": "worker.js",
+  "compatibility_date": "2026-09-02",
+  "workers_dev": true,
+  "assets": {
+    "directory": "./assets/icons",
+    "binding": "ASSETS"
+  },
+  "run_worker_first": ["/", "/health", "/manifest.json", "/download/*", "/subtitles/*"]
+}
+```
+
+- `assets.directory: ./assets/icons` با binding `ASSETS` → فایل `logo.png` زیر ریشه‌ی هسته‌ای assetهاست (`/logo.png`).
+- `run_worker_first` → این مسیرها را Worker هندل می‌کند، نه سرو مستقیم asset. مسیر لوگو (`/subtitles/logo.png`) توسط worker از `env.ASSETS` fetch می‌شود.
+
+---
+
+## جریان پردازش درخواست
+
+### حالت Node.js (addon.js)
+
+```text
+GET /subtitles/movie/tt1234567.json
+  ↓ Express
+  ↓ app.get('/download/...')؟ → نه
+  ↓ getRouter(builder.getInterface()) → builder.get({ resource:'subtitles', type:'movie', id:'tt1234567' })
+  ↓ builder.defineSubtitlesHandler → subtitlesHandler({ type, id })
+  ↓ API_KEY چک → اگر نبود { subtitles: [] }
+  ↓ parse id → imdbId = 'tt1234567'
+  ↓ (اختصاصی سریال) Cinemeta → mediaName → جستجوی text+season
+  ↓ اگر movieId نبود → جستجوی imdb
+  ↓ GET /subtitles?movieId=...&language=farsi_persian&sort=rating&limit=100
+  ↓ (اختصاصی سریال) filterSeriesSubtitles
+  ↓ map → { id, url, lang:'fas', title }
+  ↓ { subtitles: [...] }
+```
+
+### حالت Cloudflare Workers (worker.js)
+
+```text
+GET /subtitles/movie/tt1234567.json
+  ↓ worker.fetch()
+  ↓ handleRequest → strip PUBLIC_PREFIX='/subtitles' → path='/movie/tt1234567.json'
+  ↓ regex /^(movie|series)\/([^/]+?)(?:\.json)?$/ → { type:'movie', id:'tt1234567' }
+  ↓ parseStremioId → { imdbId, season, episode }
+  ↓ subtitlesHandler(type, id, env, origin)
+  ↓ (مشابه هسته Node ولی با fetchWithRetry و filterSeriesSubtitles)
+  ↓ json({ subtitles: [...] })
+```
+
+سریال:
+
+```text
+GET /subtitles/series/tt1234567:1:3.json  (Node)
+GET /subtitles/series/tt1234567:1:3.json  (Worker)
+  ↓ parse id → imdbId='tt1234567', season='1', episode='3'
+  ↓ (سریال) Cinemeta → جستجوی text+season → fallback imdb
+  ↓ GET /subtitles?movieId=...&limit=100
+  ↓ filterSeriesSubtitles → الگوهای S01E03 / S1E3 / 1x03 یا season pack
+  ↓ { subtitles: [...] }
+```
+
+---
+
+## تابع‌های کمکی عمومی
+
+### `isRetryable(error)` و `delay(ms)` (apiClient.js)
+
+```js
+function isRetryable(error) {
+  if (!error) return false;
+  if (error.code && RETRYABLE_CODES.has(error.code)) return true;
+  if (error.response) return error.response.status === 429 || error.response.status >= 500;
+  return false;
+}
+```
+
+| کد/وضعیت | retry؟ |
+|----------|--------|
+| `ECONNRESET`, `ECONNABORTED`, `ETIMEDOUT`, `EPIPE`, `EAI_AGAIN`, `ENOTFOUND` | ✅ |
+| `429` | ✅ |
+| `5xx` | ✅ |
+| سایر (مثل `404`) | ❌ |
+
+`delay(ms)` یک `setTimeout` ساده است.
+
+### `parseTimestamp(timestamp)` و `toTimestamp(ms)` (downloadProxy.js / worker.js)
+
+تبدیل `HH:MM:SS,mmm` ↔ میلی‌ثانیه. هر دو در Node (`downloadProxy`) و Worker نسخه‌ی جدا دارند ولی رفتارشان یکی است.
+
+### `addPromoTextToSubtitle(srtContent, promoText, durationSeconds, position)`
+
+در بخش [الگوریتم درج متن Promo](#الگوریتم-درج-متن-promo).
+
+### `filterSeriesSubtitles(subtitles, season, episode)`
+
+در بخش [الگوریتم تطبیق فصل/قسمت](#الگوریتم-تطبیق-فصلقسمت). نسخه‌ی Worker قبل از `parseInt` با `Number.isInteger` گارد می‌گیرد؛ نسخه‌ی Node این گارد را ندارد.
+
+### `parseStremioId(type, id)` (worker.js)
+
+```js
+function parseStremioId(type, id) {
+  if (type === 'series') {
+    const [imdbId, season, episode] = id.split(':');
+    return { imdbId, season, episode };
+  }
+  return { imdbId: id, season: null, episode: null };
+}
+```
+
+### پارسر ZIP دستی (worker.js)
+
+| تابع | نقش |
+|------|------|
+| `readU16(view, offset)` | خواندن `Uint16` little-endian |
+| `readU32(view, offset)` | خواندن `Uint32` little-endian |
+| `findEndOfCentralDirectory(bytes)` | جستجوی `0x06054b50` از انتها تا `max(0, len-65557)` |
+| `extractFirstSrt(zipBytes)` | پارس central directory (`0x02014b50`)، خواندن `method`/`compressedSize`/`localHeaderOffset` و استخراج اولین `.srt` |
+
+- روش‌های `method 0` (store) و `method 8` (deflate با `DecompressionStream('deflate-raw')`) پشتیبانی می‌شوند؛ بقیه throw می‌کنند.
+- ZIP64، data descriptor و آرشیو با `entryCount > 65535` را پشتیبانی نمی‌کند.
+- نام فایل‌ها با `TextDecoder('utf-8', { fatal: false })` decode می‌شوند.
+
+---
+
+## لایه جستجوی ترکیبی (Hybrid) در subtitlesHandler
+
+```js
+async function subtitlesHandler(args)   // args = { type, id, ... }
 ```
 
 جریان (با نام واقعی لاگ‌ها):
@@ -213,109 +549,27 @@ async function subtitlesHandler(args)   // args = { type, id, ... } از SDK
 | 1 | ورودی | `Request for subtitles received for: {id}` |
 | 2 | `if (!process.env.API_KEY)` → `return { subtitles: [] }` | `API Key is missing from .env file.` (خطا) |
 | 3 | `type === 'series'` → `id.split(':')` به `[imdbId, season, episode]`، وگرنه `imdbId = id` | — |
-| 4 | (سریال) Cinemeta `meta/series/{imdbId}.json` → `mediaRes.data.meta.name` | در صورت خطا: `Cinemeta fetch failed, falling back to Attempt 2. Error: ...` |
+| 4 | (سریال) Cinemeta `https://v3-cinemeta.strem.io/meta/series/{imdbId}.json` → `metaRes.data.meta.name` | در صورت خطا: `Cinemeta fetch failed, falling back to Attempt 2. Error: ...` |
 | 5 | جستجوی متنی: `movies/search?searchType=text&q={name}&season={season}` | `Attempt 1 (Primary): Searching with Series Name "..." and Season "..."` → `Success from Attempt 1. Found correct movieId: N` یا `Attempt 1 failed. Falling back to Attempt 2.` |
 | 6 | fallback: `movies/search?searchType=imdb&imdb={imdbId}` | `Attempt 2 (Fallback): Searching with IMDb ID directly.` → `Success from Attempt 2. Found movieId: N` |
 | 7 | `if (!movieId)` → `{ subtitles: [] }` | `Both attempts failed to find a movieId.` |
 | 8 | `GET /subtitles?movieId=...&language=farsi_persian&sort=rating&limit=100` | در صورت نبود نتیجه: `No Persian subtitles found for movieId: N` |
-| 9 | (سریال) فیلتر فصل/قسمت — بخش [۵](#۵-الگوریتم-تطبیق-فصلقسمت) | `Applying detailed filter for patterns: [S01E05, S1E5, 1x05] or season packs.` |
+| 9 | (سریال) فیلتر فصل/قسمت | `Applying detailed filter for patterns: [S01E05, S1E5, 1x05] or season packs.` |
 | 10 | `map` به قرارداد خروجی | `Successfully prepared N subtitles.` |
 | 11 | `catch` سراسری → `{ subtitles: [] }` | `Error in subtitlesHandler: {message}` (خطا) |
 
-نکات پیاده‌سازی که هنگام تغییر باید بدانی:
+نکات پیاده‌سازی:
 
-- **`season` در fallback دوم استفاده نمی‌شود**؛ یعنی اگر جستجوی متنی شکست بخورد، برای سریال نتیجه `movieId` سطح سریال برمی‌گردد و فیلتر مرحله ۹ باید قسمت را از دل آرشیو کل سریال بیرون بکشد.
-- `mediaName` هیچ escape/trim اضافه‌ای نمی‌گیرد؛ کاراکترهای `&`, `:` در نام سریال به‌صورت خام در query string می‌روند (در URL template دستی، نه `params`). اگر سابسورس با نام‌های دارای `&` مشکل دارد، `encodeURIComponent(mediaName)` همین‌جا اعمال نشده است.
-- هیچ تطبیق `type === 'movie'` با season انجام نمی‌شود؛ برای فیلم، هر ۱۰۰ زیرنویس برمی‌گردد (فیلتر فقط برای سریال).
-- خروجی `url` تنها نقطه‌ای است که `SERVER_IP`/`PORT` به کاربر نهایی نشت می‌کند — بخش [۹، مورد ۲](#۹-مسائل-شناخته‌شده-و-بدهی-فنی).
-- `Promise.resolve(...)` در بازگشت‌ها اختیاری است (تابع `async` است) ولی برای سازگاری با SDK نگه داشته شده.
-
-### downloadProxy.js
-
-```js
-async function downloadProxy(req, res)   // mounted: GET /download/:token
-```
-
-1. `const { token } = req.params` — اگر خالی بود `400 No subtitle ID provided`.
-2. اگر `!process.env.API_KEY` → `500 Server configuration error`.
-3. `apiRequest({ url: /subtitles/{token}/download, responseType: 'arraybuffer', timeout: config.LONG_TIMEOUT, headers: { 'X-API-Key': ... } })` → لاگ `Proxying download for subtitle ID: {token}`.
-4. `new AdmZip(response.data)` و `zip.getEntries().find(e => e.entryName.toLowerCase().endsWith('.srt'))` → **اولین** `.srt`، بدون اولویت‌دهی به نام بزرگ‌تر/بتر. نبودش = `404 No .srt file found in ZIP archive`.
-5. `iconv.decode(rawBuffer, 'utf-8')`؛ اگر خروجی شامل `\uFFFD` بود → `iconv.decode(rawBuffer, 'win1256')` و لاگ `Re-encoded subtitle from Windows-1256 to UTF-8 for: {entryName}`.
-6. `if (config.SUBTITLE_PROMO_TEXT)` → `addPromoTextToSubtitle(...)` در `try/catch` جدا (خطای promo هرگز دانلود را نمی‌شکند) → لاگ `Added promotional text ({position}) to subtitle {token}`.
-7. `res.setHeader('Content-Type', 'application/x-subrip; charset=utf-8')` و `res.send(srtContent)`.
-8. `catch` → `500 Failed to proxy subtitle download` و لاگ `Proxy Download Error: {message}`.
-
-تفاوت آگاهانه با Worker: اینجا `Content-Disposition` و `Cache-Control` ست **نمی‌شود** و `res.send` رشته را بدون `charset` اضافه می‌فرستد (هدر دستی ست شده). `token` هیچ اعتبارسنجی الگویی (مثلاً فقط رقم) ندارد و مستقیم در URL قرار می‌گیرد؛ مسیر نسبی با `encodeURIComponent` نساخته شده، پس کاراکترهای خاص در `token` به درخواست `/subtitles/...` منتقل می‌شوند.
-
-### addon.js
-
-نقطه ورود Node. ترتیب دقیق mount کردن مهم است:
-
-```js
-const builder = new addonBuilder(manifest);
-builder.defineSubtitlesHandler(subtitlesHandler);
-
-app.use(cors());
-app.set('trust proxy', true);
-app.disable('x-powered-by');
-app.use(requestLogger);              // res.on('finish') → `${method} ${path} - ${status} (${duration}ms)`
-app.get('/download/:token', downloadProxy);
-app.use(getRouter(builder.getInterface()));   // ← /manifest.json و /subtitles/*
-app.get('/health', ...);
-```
-
-- `getRouter` بعد از routeهای دستی mount شده؛ اگر در آینده مسیر `GET /` اضافه کنی و آن را **قبل** از router بگذاری، router همچنان `/manifest.json` را می‌گیرد ولی `/health` (که بعد از router است) با `GET /subtitles/:type/:id.json` تداخل ندارد.
-- `app.listen(config.PORT, '0.0.0.0', ...)` — bind روی همه اینترفس؛ برای preview/برون‌سپاری لازم است.
-- `gracefulShutdown(signal)` فقط `server.close()` را صدا می‌زند و بعد از `10000ms` با `process.exit(1)` force می‌کند. چون در `finally` نیست، اگر `server` تعریف نشده باشد مستقیم `process.exit(0)`.
-- `process.on('uncaughtException' | 'unhandledRejection')` فقط لاگ می‌کنند و پروسه را نکُشند — در حالت cluster یعنی worker بعد از خطای غیرمنتظره زنده می‌ماند.
-- export انتهایی `{ app, server }` برای تست‌های آینده (supertest) نگه داشته شده؛ `server` در زمان export هنوز `undefined` است چون `listen` async است.
-
-### server.js
-
-```js
-const numCPUs = config.WORKER_COUNT > 0 ? config.WORKER_COUNT : os.cpus().length;
-if (config.CLUSTER_ENABLED && cluster.isMaster) { /* fork ×N */ } else { require('./addon'); }
-```
-
-- master: fork به تعداد `numCPUs`، لاگ `Worker {pid} spawned` و `✓ Worker {pid} is online (k/N)`.
-- `cluster.on('exit')` → لاگ `⚠️  Worker {pid} died (code: ..., signal: ...)` و بعد از `1000ms` fork جدید با لاگ `🔄 New worker {pid} started`.
-- `gracefulShutdown` master: به هر worker پیام `'shutdown'` را `send` می‌کند (⚠️ هیچ `process.on('message')` در `addon.js` این پیام را مصرف نمی‌کند، پس فقط timer ۱۰ ثانیه‌ای و در نهایت `SIGKILL` عمل می‌کند)، سپس master بعد از `15000ms` خارج می‌شود.
-- اگر `CLUSTER_ENABLED=false` باشد، `server.js` عملاً همان `addon.js` را در همان پروسه require می‌کند (بدون master) — تفاوت فقط در یک لاگ `Worker {pid} starting...`.
-
-### worker.js
-
-`export default { async fetch(request, env) }` و داخلش `handleRequest`:
-
-| مسیر | پاسخ |
-|------|------|
-| `OPTIONS` هر مسیری | `204` + هدرهای CORS |
-| غیر `GET` | `405 Method Not Allowed` |
-| `/subtitles` یا `/subtitles/` | `{ status:'ok', service:'subsource-stremio-addon', runtime:'cloudflare-workers' }` |
-| `/subtitles/health` | همان JSON بالا (بدون uptime) |
-| `/subtitles/manifest.json` | `getManifest(url.origin)`، کش `public, max-age=300` |
-| `/subtitles/logo.png` | `env.ASSETS.fetch` (بدون binding → `404`) |
-| `/subtitles/download/{id}` | `downloadProxy(id, env)` |
-| `/subtitles/{movie\|series}/{id}[.json]` | `json(await subtitlesHandler(type, id, env, url.origin))` |
-| بقیه | `404 Not Found` |
-
-توابع داخلی و جزئیاتشان:
-
-- `json(data, status, extraHeaders)` — همیشه `access-control-allow-origin: *`، `content-type: application/json; charset=utf-8` و `cache-control: no-store`.
-- `withCors(res)` — سه هدر CORS را روی یک پاسخ موجود کپی/ست می‌کند (برای بدنه SRT استفاده می‌شود).
-- `fetchWithRetry(url, options, retries = 3)` — `AbortController` + `setTimeout` برای تایم‌اوت (پیش‌فرض `DEFAULT_TIMEOUT_MS = 60000`)، retry روی `[429,500,502,503,504]` و خطاهای throw شده، backoff `300 * 2 ** attempt + rand(0..199)`. ⚠️ مقدار `LONG_TIMEOUT` در `env` فقط در `downloadProxy` خوانده می‌شود، نه در `fetchJson` مسیر جستجو.
-- `fetchJson` — اگر `!response.ok` باشد `Error('HTTP {status} for {url}')` throw می‌کند؛ یعنی پاسخ `4xx` retry نمی‌شود ولی `fetchWithRetry` آن را برگردانده و اینجا تبدیل به خطا می‌کند.
-- `apiHeaders(env)`, `parseStremioId(type, id)` (بدون guard برای `id` بدون `:`؛ اگر سریال `tt1` بدون season بیاید، `season === undefined`).
-- `getMovieId(type, imdbId, season, env)` — دقیقاً معادل Attempt 1/Attempt 2 نسخه Node، با `encodeURIComponent` روی `name`، `imdbId` و `season` (تفاوت با Node).
-- `filterSeriesSubtitles(subtitles, season, episode)` — `Number.isInteger` روی هر دو؛ در نبودش `[]` برمی‌گرداند (رفتار متفاوت با Node که اینجا `NaN` را در pattern می‌گذارد و عملاً همه فیلتر می‌شوند).
-- `findEndOfCentralDirectory(bytes)` — جستجوی `0x06054b50` از انتها تا `max(0, len-65557)`، یعنی حداکثر comment اندازه ۶۵۵۳۵ بایت پشتیبانی می‌شود. ⚠️ `readU32(new DataView(bytes.buffer, bytes.byteOffset, ...), i)` با offset ساخته می‌شود اما در حلقه اصلی `view` جداست؛ اگر `ArrayBuffer` یک `byteOffset` غیرصفر داشته باشد، مقایسه EOCD می‌تواند بی‌جهت بخورد.
-- `extractFirstSrt(zipBytes)` — پارس central directory (`0x02014b50`)، خواندن `method`, `compressedSize`, `fileNameLength`, `localHeaderOffset`؛ فقط `method 0` (store) و `method 8` (deflate با `DecompressionStream('deflate-raw')`) پشتیبانی می‌شود، بقیه `throw`. ZIP64، data descriptor و archive با `entryCount > 65535` پشتیبانی نمی‌شوند.
-- `parseTimestamp` / `toTimestamp` / `addPromoTextToSubtitle` — همان الگوریتم SRT بخش [۶](#۶-الگوریتم-درج-متن-promo-در-srt)؛ رنگ `&H00FFFF00` هاردکد است.
-- `getAsset(pathname, request, env)` — `assetUrl.pathname = pathname` روی URL درخواست اصلی؛ یعنی assetها باید ریشه‌ی `assets.directory` باشند (`/logo.png` نه `/icons/logo.png`).
-- حالت ماژول: فایل ESM است (`export default`) ولی خط اولش `require('./manifest')` است؛ خود `wrangler` این را resolve می‌کند، اما `node worker.js` مستقیم کار نمی‌کند (در `package.json` هم `type: "commonjs"` است).
+- `API_BASE_URL = 'https://api.subsource.net/api/v1'` و `PERSIAN_LANG_CODE = 'farsi_persian'`.
+- **`season` در fallback دوم استفاده نمی‌شود**؛ یعنی اگر جستجوی متنی شکست بخورد، نتیجه `movieId` سطح سریال برمی‌گردد و فیلتر مرحله ۹ باید قسمت را از دل آرشیو کل سریال بیرون بکشد.
+- `mediaName` هیچ escape/trim اضافه‌ای نمی‌گیرد؛ کاراکترهای `&`, `:` در نام سریال به‌صورت خام در URL template می‌روند.
+- هیچ تطبیقی با `season` برای فیلم انجام نمی‌شود؛ برای فیلم، هر ۱۰۰ زیرنویس برمی‌گردد (فیلتر فقط برای سریال).
+- خروجی `url` تنها نقطه‌ی نشت `SERVER_IP`/`PORT` به کاربر است: `http://${SERVER_IP}:${PORT}/download/${subtitleId}`.
+- `id` همان `sub.subtitleId.toString()` است؛ `lang` همیشه `'fas'` است؛ `title` همان `releaseInfo.join(' ')` است.
 
 ---
 
-## ۵. الگوریتم تطبیق فصل/قسمت
+## الگوریتم تطبیق فصل/قسمت
 
 ورودی: `season`, `episode` (از `id` استرمیو) و `data[]` از endpoint `/subtitles`.
 
@@ -333,18 +587,43 @@ keep = episodePatterns.some(p => release.includes(p))
     || (release.includes('COMPLETE') && seasonPatterns.some(p => release.includes(p)));
 ```
 
-خواص و دام‌های مهم:
+خواص و نکات:
 
 - `releaseInfo` باید **آرایه** باشد؛ اگر رشته باشد یا نباشد، آن زیرنویس حذف می‌شود (`if (!Array.isArray(sub.releaseInfo)) return false`).
 - نرمال‌سازی فقط `-`, `.`, `_` و فاصله را حذف می‌کند؛ `[]`, `()`, و کاراکترهای یونیکد دست‌نخورده می‌مانند. پس `[S01E05]` کار می‌کند ولی `1×5` (علامت ضربدر) خیر.
 - چون `S1E5` پس از حذف صفرها نوشته می‌شود و `release` هم بدون جداکننده است، هر دو شکل `S01E05` و `S1E5` معمولاً با الگوی `S01E05` تطبیق می‌خورند؛ اما `1x5` (بدون pad) با `1x05` تطبیق **نمی‌خورد**.
 - فصل‌های دو رقمی: `season = 10` → `S10E05` و `S10E5`، و `SEASON10` / `S10`؛ مشکلی نیست.
-- حالت «پرونده نامعتبر»: اگر `season`/`episode` عددی نباشد (مثلاً `special`)، نسخه Node فیلتر را اجرا می‌کند و همه چیز حذف می‌شود، نسخه Worker زودتر `[]` برمی‌گرداند.
-- **هیچ ترتیب/امتیازدهی اضافه‌ای وجود ندارد:** ترتیب خروجی همان ترتیب `sort=rating` از سابسورس است. اگر بخواهی «بهترین نسخه» اول بیاید، باید همان‌جا امتیازدهی (زیرنویس تک‌فایلی > season pack، ۱۰۸۰p > ۷۲۰p و...) اضافه کنی.
+- state «پرونده نامعتبر»: اگر `season`/`episode` عددی نباشد (مثلاً `special`)، نسخه Worker زودتر `[]` برمی‌گرداند (`Number.isInteger`)، نسخه Node فیلتر را اجرا می‌کند و عملاً همه‌چیز حذف می‌شود.
+- **هیچ ترتیب/امتیازدهی اضافه‌ای وجود ندارد:** ترتیب خروجی همان ترتیب `sort=rating` از سابسورس است.
 
 ---
 
-## ۶. الگوریتم درج متن Promo در SRT
+## لایه دانلود و استخراج SRT
+
+```js
+async function downloadProxy(req, res)   // mounted: GET /download/:token
+```
+
+1. `const { token } = req.params` — اگر خالی بود `400 No subtitle ID provided`.
+2. اگر `!process.env.API_KEY` → `500 Server configuration error`.
+3. `apiRequest({ url: /subtitles/{token}/download, responseType: 'arraybuffer', timeout: config.LONG_TIMEOUT, headers: { 'X-API-Key': ... } })` → لاگ `Proxying download for subtitle ID: {token}`.
+4. `new AdmZip(response.data)` و `zip.getEntries().find(e => e.entryName.toLowerCase().endsWith('.srt'))` → **اولین** `.srt`. نبودش = `404 No .srt file found in ZIP archive`.
+5. `iconv.decode(rawBuffer, 'utf-8')`؛ اگر خروجی شامل `\uFFFD` بود → `iconv.decode(rawBuffer, 'win1256')` و لاگ `Re-encoded subtitle from Windows-1256 to UTF-8 for: {entryName}`.
+6. `if (config.SUBTITLE_PROMO_TEXT)` → `addPromoTextToSubtitle(...)` در `try/catch` جدا (خطای promo هرگز دانلود را نمی‌شکند) → لاگ `Added promotional text ({position}) to subtitle {token}`.
+7. `res.setHeader('Content-Type', 'application/x-subrip; charset=utf-8')` و `res.send(srtContent)`.
+8. `catch` → `500 Failed to proxy subtitle download` و لاگ `Proxy Download Error: {message}`.
+
+تفاوت آگاهانه با Worker:
+
+| Node (`downloadProxy.js`) | Worker (`worker.js`) |
+|---------------------------|----------------------|
+| `adm-zip` + `iconv-lite` | پارسر ZIP دستی + `TextDecoder` |
+| `Content-Type` + `res.send` | `Content-Disposition` + `Cache-Control` هم ست می‌کند |
+| `token` بدون اعتبارسنجی الگو | `token` با `encodeURIComponent` در URL؛ بعد از match با `decodeURIComponent` |
+
+---
+
+## الگوریتم درج متن Promo
 
 ```js
 addPromoTextToSubtitle(srtContent, promoText, durationSeconds, position)
@@ -360,122 +639,277 @@ addPromoTextToSubtitle(srtContent, promoText, durationSeconds, position)
    - از تایم‌لاین آخرین بلوک، `gapMs = min(3000, max(0, (end - start) * 0.3))`،
    - `promoStart = end - gapMs`، `promoEnd = promoStart + durationMs`،
    - شماره بلوک جدید = `blocks.length + 1`.
-5. در Node یک fallback نهایی هم وجود دارد: اگر هیچ خط `-->` پیدا نشد، بلوک promo با `lastEndTime` به انتها اضافه می‌شود (در Worker در این حالت هیچ تغییری اعمال نمی‌شود — بخشی از بدهی هم‌رفتاری).
+5. در Node یک fallback نهایی هم وجود دارد: اگر هیچ خط `-->` پیدا نشد، بلوک promo با `lastEndTime` به انتها اضافه می‌شود (در Worker در این حالت هیچ تغییری اعمال نمی‌شود).
 
 نکات تست: بلوک‌های دارای خط توضیحی اضافه، بلوک‌های چندخطی، و زیرنویس‌هایی که شماره‌شان از ۱ شروع نمی‌شود، رفتار شماره‌گذاری مجدد را می‌توانند خراب کنند.
 
 ---
 
-## ۷. مدل خطاها و لاگ‌ها
+## سرور Node.js و روت‌ها
 
-- **هیچ‌وقت ۵۰۰ به Stremio برای مسیر جستجو برنمی‌گردد:** همه خطاها در `subtitlesHandler` (Node و Worker) بلعیده و به `{ subtitles: [] }` تبدیل می‌شوند. عیب‌یابی فقط از طریق لاگ ممکن است.
-- مسیر دانلود **کد وضعیت واقعی** برمی‌گرداند: `400` (token خالی)، `500` (کلید نبود / خطای عمومی) در Node؛ `400`, `500`, `502` (خطای proxy) و پاس‌ترانس `response.status` از سابسورس در Worker.
-- `worker.js` یک پوش نهایی دارد: هر throw نشده → `json({ error: 'Internal Server Error' }, 500)`.
-- لاگ‌های Node همه `console.log/warn/error` ساده‌اند؛ `LOG_LEVEL` فیلتر ندارد. در حالت cluster لاگ همه workerها در یک stdout قاطی می‌شود و هیچ `pid` در خطوط درخواست نیست.
-- برای افزودن ساختار به لاگ، جای امن همان middleware لاگ در `addon.js` است (`res.on('finish')`)؛ لاگ‌های `apiClient` را به `console.info` منتقل نکن اگر انتظار داری CI لاگ را نگه دارد.
+در `addon.js` و فقط وقتی `main` است (اجرای مستقیم) بالا می‌آید.
 
----
+### ترتیب middleware (مهم)
 
-## ۸. پیکربندی کامل متغیرهای محیطی
+| ترتیب | روت | منبع | توضیح |
+|-------|-----|------|-------|
+| ۱ | `*` | middleware `cors()` | CORS برای کل app |
+| ۲ | `*` | `app.set('trust proxy', true)` + `disable('x-powered-by')` | شناسایی IP پشت proxy و حذف هدر امنیتی |
+| ۳ | `*` | request logger | `res.on('finish')` → `[ISO] METHOD path - status (durationms)` |
+| ۴ | `GET /download/:token` | `downloadProxy` | دانلود و استخراج SRT |
+| ۵ | `*` | `getRouter(builder.getInterface())` | مسیرهای Stremio: `/manifest.json` و `/subtitles/:type/:id.json` |
+| ۶ | `GET /health` | سفارشی | وضعیت process: uptime، memory، cpuLoad |
 
-### Node — مصرف‌شده در کد
+### مدیریت خطای سرور
 
-| متغیر | پیش‌فرض | خواننده |
-|-------|---------|---------|
-| `API_KEY` | — (اجباری رفتاری) | `subtitlesHandler.js`, `downloadProxy.js` (از `process.env`) |
-| `PORT` | `7000` | `addon.js` (`listen`), `subtitlesHandler.js` (URL) |
-| `SERVER_IP` | `127.0.0.1` | `addon.js` (لاگ نصب), `subtitlesHandler.js` (URL) |
-| `LONG_TIMEOUT` | `60000` | `apiClient.js` (پیش‌فرض timeout), `downloadProxy.js` |
-| `MAX_SOCKETS` | `50` | `apiClient.js` (agentها) |
-| `CLUSTER_ENABLED` | `false` | `server.js` |
-| `WORKER_COUNT` | `0` (= تعداد هسته) | `server.js` |
-| `SUBTITLE_PROMO_TEXT` | متن حمایت پیش‌فرض | `downloadProxy.js` |
-| `SUBTITLE_PROMO_DURATION` | `20` | `downloadProxy.js` |
-| `SUBTITLE_PROMO_POSITION` | `end` | `downloadProxy.js` |
-
-### Node — تعریف‌شده در `config.js` ولی بدون مصرف (بدهی فنی)
-
-`SHORT_TIMEOUT` · `LOG_LEVEL` · `RATE_LIMIT_ENABLED` · `RATE_LIMIT_MAX` · `RATE_LIMIT_WINDOW_MS` · `CACHE_ENABLED` · `REDIS_URL` · `CACHE_TTL` · `MAX_FREE_SOCKETS`
-
-این‌ها در `.env.example` هم وجود دارند؛ اگر پیاده‌سازی‌شان نکردی، تغییرشان هیچ اثری ندارد. دو گزینه: (الف) پیاده‌سازی، (ب) حذف از `config.js` و `.env.example` تا سند گمراه‌کننده نماند.
-
-### Worker (Cloudflare)
-
-| متغیر | منبع | رفتار نبودش |
-|-------|------|--------------|
-| `API_KEY` | Worker Secret (در CI با `wrangler secret put`) | `getMovieId` throw → `{subtitles: []}`؛ دانلود → `500 Server configuration error` |
-| `LONG_TIMEOUT` | Var (اختیاری) | پیش‌فرض داخلی `60000ms` فقط در دانلود |
-| `SUBTITLE_PROMO_TEXT` | Var (اختیاری) | `DEFAULT_PROMO_TEXT` داخل `worker.js`؛ رشته خالی = بدون promo |
-| `SUBTITLE_PROMO_DURATION` / `_POSITION` | Var (اختیاری) | `20` / `end` |
-| `ASSETS` | binding خودکار از `wrangler.jsonc` | نبودش → `404` روی `/subtitles/logo.png` |
-
----
-
-## ۹. مسائل شناخته‌شده و بدهی فنی
-
-۱. **تکرار منطق بین Node و Worker.** `subtitlesHandler`, `downloadProxy`, `parseTimestamp`, `toTimestamp`, `addPromoTextToSubtitle`, retry/backoff و الگوهای فصل/قسمت در دو جا پیاده‌سازی شده‌اند و هم‌اکنون ۴ تفاوت رفتاری دارند: `encodeURIComponent`، گارد `Number.isInteger`، گارد `startsWith('tt')`، و شاخه `position: 'start'` Worker که شماره‌گذاری مجدد نمی‌کند. راه‌حل پیشنهادی: یک `core.js` بدون I/O و بدون وابستگی Node-only، با تزریق `fetch`/`env`.
-
-۲. **URL دانلود هاردکد `http://SERVER_IP:PORT`.** پشت TLS proxy یا پورت غیراستاندارد، لینک‌ها یا `http` می‌مانند یا پورت داخلی را لو می‌دهند. راه‌حل: ساخت URL از `x-forwarded-proto` + `Host` (`app.set('trust proxy', true)` از قبل فعال است) — الگوی آن در پروژه خواهرش با `req.get('host')` قابل پیاده‌سازی است؛ `subtitlesHandler` فعلی به `req` دسترسی ندارد، پس باید handler با `getRouter` یا middleware مقدار `baseUrl` را به args اضافه کند (SDK آن را در `args` نمی‌فرستد).
-
-۳. **`LONG_TIMEOUT` در Worker بی‌اثر است** برای requestهای جستجو (فقط دانلود آن را می‌خواند). اگر جستجو آهسته باشد، تایم‌اوت ۶۰ ثانیه‌ای Edge را نزدیک سقف CPU/wall-clock Worker می‌برد.
-
-۴. **متغیرهای مصرف‌نشده config** (بخش [۸](#۸-پیکربندی-کامل-متغیرهای-محیطی)) و نبود هرگونه rate limit در حالی که `RATE_LIMIT_*` وعده داده می‌شود.
-
-۵. **پارسر ZIP Worker شکننده است:** فقط `method` ۰ و ۸، بدون ZIP64، بدون data descriptor، جستجوی EOCD با `DataView` که `byteOffset` بافر را در حلقه اصلی در نظر نمی‌گیرد، و انتخاب «اولین `.srt`» به‌جای «بزرگ‌ترین/پرسازش‌ترین». آرشیوهایی با چند فایل (`.srt` + `.idx` + `README.txt`) ممکن است فایل اشتباه بدهند.
-
-۶. **بدون cache:** هر درخواست Stremio (مثلاً هر بار باز کردن صفحه یک قسمت) یک جستجوی جدید Cinemeta + دو request سابسورس می‌زند. `subtitleId`ها تغییرناپذیرند و کش `movieId → subtitles` برای چند دقیقه بی‌خطر است.
-
-۷. **`subtitleId` بدون اعتبارسنجی الگو** به `downloadProxy` می‌رسد و مستقیم در مسیر URL قرار می‌گیرد؛ محدود به `encodeURIComponent` در Worker است، ولی در Node همان `req.params.token` خام است. یک `/^[0-9]+$/` ساده، سطح حمله و لاگ‌های عجیب را کم می‌کند.
-
-۸. **`adm-zip`, `cheerio`, `axios-https-proxy-fix`, `https-proxy-agent`** در وابستگی‌ها هستند ولی در مسیر اصلی استفاده نمی‌شوند (`cheerio` هیچ‌جا import نشده؛ دو پکیج proxy هم مصرف‌کننده ندارند). `npm audit` و اندازه نصب را بی‌دلیل بزرگ می‌کنند.
-
-۹. **نبود تست، lint، Dockerfile و فایل `LICENSE`** در مخزن؛ `npm test` عمداً `exit 1` می‌کند. در کنارش `package.json` دو مقدار نیازمند اصلاح دارد: `name: "Persian Subtitles"` (فاصله و حرف بزرگ → `npm publish` رد می‌کند) و `license: "Apache License 2.0"` که شکل canonical آن `Apache-2.0` است و بدون فایل `LICENSE` عملاً بی‌اثر می‌ماند. تنها تست موجود، اجرای دستی + `wrangler deploy --dry-run` در CI است.
-
-۱۰. **`cluster.on('exit')` بدون سقف restart:** اگر پروسه بلافاصله بعد از listen بمیرد (مثلاً `EADDRINUSE`)، حلقه fork/restart هر ۱ ثانیه بی‌نهایت ادامه پیدا می‌کند. یک counter با backoff افزایشی لازم است.
-
-۱۱. **`message: 'shutdown'` بی‌مصرف** در `server.js`؛ worker آن را نمی‌فهمد و shutdown تدریجی واقعی (قطع اتصال‌های باز) انجام نمی‌شود.
-
-۱۲. **`manifest.js` هنوز بدون `logo` است** → نسخه Node در Stremio آیکن پیش‌فرض دارد در حالی که نسخه Worker لوگو نشان می‌دهد (ناهمانی ظاهری بین دو runtime).
-
----
-
-## ۱۰. راهنمای تست و بازبینی تغییرات
-
-قبل از PR، این حداقل‌ها را اجرا کن (همه با Node `20.18.1+`؛ نسخه CI: `22`):
-
-```bash
-# ۱) ساختار و syntax
-node --check addon.js && node --check server.js && node --check apiClient.js \
-  && node --check config.js && node --check downloadProxy.js && node --check manifest.js \
-  && node --check subtitlesHandler.js
-
-# ۲) boot Node بدون کلید واقعی (باید بدون crash بالا بیاید و /health بدهد)
-API_KEY=dummy PORT=7101 SERVER_IP=127.0.0.1 node addon.js &
-sleep 1
-curl -s localhost:7101/manifest.json
-curl -s localhost:7101/health
-curl -s localhost:7101/subtitles/movie/tt0111161.json   # → {"subtitles":[]} یا لیست واقعی
-
-# ۳) ruting Worker + باندل
-npx --yes wrangler dev --port 8787
-curl -s localhost:8787/subtitles/manifest.json
-curl -s -o /dev/null -w '%{http_code}\n' localhost:8787/     # انتظار: 404
-curl -s localhost:8787/subtitles/movie/tt0111161.json
-
-# ۴) بررسی نهایی که CI انجام می‌دهد
-npx --yes wrangler@4.128.0 deploy --dry-run
+```js
+server = app.listen(config.PORT, '0.0.0.0', () => { ... });
 ```
 
-تست‌های واحد پیشنهادی (هنوز در مخزن نیست، ولی منطق خالص‌اند و بدون شبکه کار می‌کنند):
+- لاگ موفق:
 
-| تابع | ورودی‌های مرزی که باید پاس شوند |
-|------|-------------------------------|
-| `addPromoTextToSubtitle` | زیرنویس ۱ بلوکی؛ بلوک بدون خط `-->`; `position: 'start'` با renumber; بلوک انتهایی با `end === start` |
-| `parseTimestamp` / `toTimestamp` | `00:00:00,000`، `99:59:59,999`، رشته با فاصله اضافه |
-| `filterSeriesSubtitles` | `S1E5` vs `S01E05`، `1x5` (باید رد شود)، `SEASON 01 COMPLETE`، `releaseInfo` غیرآرایه |
-| `extractFirstSrt` / adm-zip | ZIP با `method 0`، `method 8`، آرشیو بدون `.srt`، آرشیو با comment > 0 |
-| `isRetryable` / backoff | `ECONNRESET` (retry)، `404` (بدون retry)، `429` (retry)، `ENOTFOUND` (retry) |
+```text
+===========================================
+Persian Subtitles Add-on Server Started
+===========================================
+Server listening on port: 7000
+Available CPU cores: N
+Install URL: http://127.0.0.1:7000/manifest.json
+Health check: http://127.0.0.1:7000/health
+===========================================
+```
 
-برای تست بدون درگیری با سابسورس، `apiRequest` را mock کن و فقط تابع خالص را صدا بزن: در `worker.js` توابع export نشده‌اند، پس اگر خواستی تست node-based بنویسی، آن‌ها را با `export { ... }` یا یک `lib/` جدا قابل‌import کن (این هم یکی از دلایل پیشنهاد `core.js` در بخش ۹ است).
+- `gracefulShutdown`: بعد از `SIGTERM`/`SIGINT` اول `server.close()`، بعد از `10s` force `process.exit(1)`.
 
 ---
+
+## Cloudflare Worker و روت‌ها
+
+### روت‌های پشتیبانی‌شده
+
+`PUBLIC_PREFIX = '/subtitles'` — Worker پیشوند را جدا می‌کند و بقیه‌ی مسیر را match می‌کند:
+
+| مسیر عمومی | مسیر بعد از prefix | هندلر |
+|------------|--------------------|-------|
+| `GET /subtitles` یا `/subtitles/` | `/` | status ok |
+| `GET /subtitles/health` | `/health` | status ok |
+| `GET /subtitles/manifest.json` | `/manifest.json` | `getManifest(url.origin)` + cache `public, max-age=300` |
+| `GET /subtitles/logo.png` | `/logo.png` | `getAsset` از `env.ASSETS` |
+| `GET /subtitles/download/{id}` | `/download/{id}` | `downloadProxy(id, env)` |
+| `GET /subtitles/{movie\|series}/{id}[.json]` | `/movie|series/{id}[.json]` | `subtitlesHandler(type, id, env, url.origin)` |
+| `OPTIONS` هر مسیری | — | `204` + هدرهای CORS |
+| غیر `GET` | — | `405 Method Not Allowed` |
+| بقیه | — | `404 Not Found` |
+
+### پیاده‌سازی `handleRequest`
+
+```js
+const path = url.pathname === PUBLIC_PREFIX ? '/'
+  : url.pathname.startsWith(`${PUBLIC_PREFIX}/`) ? url.pathname.slice(PUBLIC_PREFIX.length) : null;
+```
+
+- اگر `path === null` → `404`.
+- regex دانلود: `/^\/download\/([^/]+)$/` → `downloadProxy(decodeURIComponent(...), env)`.
+- regex جستجو: `/^\/(movie|series)\/([^/]+?)(?:\.json)?$/` → `subtitlesHandler(type, decodeURIComponent(id), env, url.origin)`.
+
+### CORS
+
+- همه‌ی پاسخ‌های JSON هدر `access-control-allow-origin: *` دارند (`JSON_HEADERS`).
+- `withCors(response)` برای بدنه‌ی SRT سه هدر `access-control-*` را کپی می‌کند.
+- `OPTIONS` هر مسیری → `204` با CORS.
+
+### `getManifest(origin)`
+
+```js
+return {
+  ...manifest,
+  behaviorHints: { ...(manifest.behaviorHints || {}), configurable: false },
+  logo: `${origin}${PUBLIC_PREFIX}/logo.png`
+};
+```
+
+### Error handling
+
+`fetch` بیرونی یک پوش نهایی دارد: هر throw نشده → `json({ error: 'Internal Server Error' }, 500)`.
+
+---
+
+## ساختار خروجی subtitle
+
+```json
+{
+  "subtitles": [
+    {
+      "id": "1234567",
+      "url": "http://HOST:PORT/download/1234567",
+      "lang": "fas",
+      "title": "WEB-DL 1080p S01E05"
+    }
+  ]
+}
+```
+
+| فیلد | توضیح |
+|------|-------|
+| `id` | همان `subtitleId` سابسورس (به رشته) |
+| `url` | لینک proxy افزونه؛ در Node `http://${SERVER_IP}:${PORT}/download/{id}`، در Worker `${origin}/subtitles/download/{id}` |
+| `lang` | همیشه `'fas'` |
+| `title` | `releaseInfo.join(' ')`؛ اگر `releaseInfo` آرایه نباشد → `'Subtitle'` (Node) یا `'Persian Subtitle'` (Worker) |
+
+> فایل تحویل‌شده: `Content-Type: application/x-subrip; charset=utf-8` و بدنه‌ی SRT خالص (UTF-8). هیچ `behaviorHints` یا فیلد `hash`/`id` سراسری تولید نمی‌شود.
+
+---
+
+## نمونه درخواست‌ها
+
+### Node.js (پورت 7000)
+
+```bash
+curl http://localhost:7000/manifest.json
+curl http://localhost:7000/subtitles/movie/tt0111161.json
+curl http://localhost:7000/subtitles/series/tt0903747:1:3.json
+curl -I http://localhost:7000/download/1234567
+curl http://localhost:7000/health
+```
+
+### Cloudflare Workers (لوکال با wrangler)
+
+```bash
+npx wrangler dev --port 8787
+curl http://localhost:8787/subtitles/manifest.json
+curl http://localhost:8787/subtitles/movie/tt0111161.json
+curl http://localhost:8787/subtitles/series/tt0903747:1:3.json
+curl http://localhost:8787/subtitles/download/1234567
+curl http://localhost:8787/subtitles/logo.png
+curl http://localhost:8787/subtitles
+```
+
+---
+
+## استقرار
+
+### گزینه A: Node.js hosting (VPS, Railway, Render, Fly.io, Heroku)
+
+1. Node.js `20.18.1+`
+2. `npm install`
+3. ساخت `.env` و ست `API_KEY` (اجباری)
+4. دستور اجرا:
+   - تک‌پروسه: `npm run dev` یا `npm run start:single` (یعنی `node addon.js`)
+   - Cluster: `npm start` (یعنی `node server.js`) با `CLUSTER_ENABLED=true`
+5. متغیرهای رایج: `PORT` (پیش‌فرض `7000`)، `SERVER_IP` (باید روی دامنه‌ی عمومی ست شود تا URL زیرنویس درست باشد)
+6. مسیرهای عمومی:
+   ```
+   /manifest.json
+   /subtitles/movie/{imdbId}.json
+   /subtitles/series/{imdbId}:{season}:{episode}.json
+   /download/{subtitleId}
+   /health
+   ```
+7. نصب: `stremio://YOUR_DOMAIN/manifest.json`
+
+### گزینه B: Cloudflare Workers (پیشنهادی برای Edge)
+
+1. `npm install`
+2. ست Secret `API_KEY` (در CI انجام می‌شود یا با `wrangler secret put API_KEY`)
+3. `npx wrangler deploy` (یا از طریق GitHub Actions)
+4. آدرس نصب: `https://<worker>.workers.dev/subtitles/manifest.json` → تبدیل به `stremio://<worker>.workers.dev/subtitles/manifest.json`
+5. لوگو خودکار: `https://<worker>.workers.dev/subtitles/logo.png`
+6. assetها از `./assets/icons` سرو می‌شود؛ نیازی به سرور جدا نیست.
+
+### نکات HTTPS و Proxy
+
+- در Node، اگر پشت TLS proxy هستید، `app.set('trust proxy', true)` فعال است؛ اگر میزبان `X-Forwarded-Proto: https` را ست کند، رفتار درست است.
+- در Worker، `url.origin` همیشه scheme درست را دارد.
+
+---
+
+## CI/CD
+
+### `.github/workflows/deploy-worker.yml`
+
+```yaml
+name: Deploy Cloudflare Worker
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'worker.js'
+      - 'manifest.js'
+      - 'wrangler.jsonc'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'assets/icons/**'
+      - '.github/workflows/deploy-worker.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npx --yes wrangler@4.128.0 deploy --dry-run
+      - uses: ...  # wrangler secret put API_KEY with secrets.SUBSOURCE_API_KEY
+      - run: npx --yes wrangler@4.128.0 deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+```
+
+- فقط تغییرات مرتبط با Worker دیپلوی را trigger می‌کند.
+- **`wrangler deploy --dry-run`** قبل از دیپلوی، باندل را validate می‌کند.
+- Secret `API_KEY` با `wrangler secret put API_KEY` از `secrets.SUBSOURCE_API_KEY` ست می‌شود.
+- نیاز به secrets `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `SUBSOURCE_API_KEY`.
+- Wrangler نسخه `4.128.0` پین‌شده.
+
+---
+
+## عیب‌یابی
+
+### `API Key is missing from .env file.`
+
+در Node `API_KEY` را در `.env` یا Environment Variables اضافه کنید. در Worker، مقدار `API_KEY` را با `wrangler secret put API_KEY` یا در داشبورد Cloudflare ست کنید.
+
+### `Port 7000 is already in use` (Node)
+
+```bash
+PORT=7001 npm run start:single
+```
+
+### زیرنویس برنمی‌گردد
+
+- آیا `API_KEY` معتبر است؟
+- آیا `GET /subtitles?movieId=...` پاسخ `{ success: true, data: [...] }` می‌دهد؟
+- برای سریال: آیا `releaseInfo` شامل `S01E03` / `1x03` یا `SEASON01 COMPLETE` است؟
+
+### `/health` در Worker 404 می‌دهد
+
+Worker فقط `/subtitles/health` را دارد (`/health` بدون prefix توسط `run_worker_first` هندل نمی‌شود). برای health check از `/subtitles/health` یا `/subtitles` استفاده کنید.
+
+### دانلود 404 می‌دهد
+
+یعنی در ZIP آرشیو، هیچ فایل `.srt`ای نبوده (`No .srt file found in ZIP archive`). آرشیوهایی که فقط `.idx`/`README` دارند چنین خطایی می‌دهند.
+
+### لوگو نمایش داده نمی‌شود (Worker)
+
+- URL `https://<worker>/subtitles/logo.png` باید پاسخ `200` بدهد.
+- `wrangler.jsonc` باید `assets.directory: ./assets/icons` و binding `ASSETS` داشته باشد.
+
+### Worker دیپلوی نمی‌شود
+
+- `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `SUBSOURCE_API_KEY` در secrets گیت‌هاب ست شده‌اند؟
+- `wrangler@4.128.0 deploy --dry-run` را لوکال اجرا کنید و لاگ Action را چک کنید.
+
+---
+
+## حمایت از پروژه
+
+اگر این افزونه برایت مفید بوده، حمایت تو کمک می‌کند پروژه پایدارتر و هماهنگ با تغییرات منابع زیرنویس بماند ❤️
+
+```text
+alirostami.com/support
+```
+
+ساخته شده با ❤️ برای جامعه فارسی‌زبان Stremio

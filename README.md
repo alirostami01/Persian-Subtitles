@@ -82,7 +82,7 @@
 │       └── subtitles-fa.png         # تصویر استاتیک اضافی (۲۰۴۸×۲۰۴۸)
 ├── config.js                        # تمام تنظیمات از env (dotenv) + مقادیر پیش‌فرض
 ├── docs/
-│   └── DOCUMENTATION.md             # مستندات فنی: منطق، تابع‌ها، بدهی فنی و راهنمای تست
+│   └── DOCUMENTATION.md             # مستندات فنی: معماری، منطق، تابع‌ها و راهنمای تست
 ├── downloadProxy.js                 # دانلود ZIP، استخراج SRT، repair encoding، درج متن Promo
 ├── manifest.js                      # manifest افزونه (subtitles / movie+series / tt)
 ├── package.json                     # اسکریپت‌ها و وابستگی‌های Node.js
@@ -102,12 +102,12 @@
 | `subtitlesHandler.js` | پارس `id`، جستجوی Cinemeta/SubSource، فیلتر فصل/قسمت، ساخت خروجی `{ subtitles: [...] }` |
 | `downloadProxy.js` | دانلود ZIP از SubSource، استخراج اولین `.srt`، تبدیل encoding، درج بلوک Promo، پاسخ با `application/x-subrip` |
 | `server.js` | منطقی `cluster`؛ اگر `CLUSTER_ENABLED=true` بود master هست و به تعداد هسته‌ها worker می‌سازد، در غیر این صورت همان پروسه `addon.js` را require می‌کند |
-| `docs/DOCUMENTATION.md` | مستندات فنی برنامه‌نویس: معماری، مستندات تابع‌به‌تابع، الگوریتم تطبیق فصل/قسمت، جدول کامل env و فهرست ۱۲‌موردی بدهی فنی |
+| `docs/DOCUMENTATION.md` | مستندات فنی برنامه‌نویس: معماری، مستندات تابع‌به‌تابع، الگوریتم تطبیق فصل/قسمت، جدول کامل env |
 | `worker.js` | مسیرهای زیر prefix `/subtitles`، retry با `AbortController`، پارسر ZIP دستی، `TextDecoder` برای UTF-8/Windows-1256، سرو asset لوگو از `env.ASSETS` |
 | `wrangler.jsonc` | `name: subsource-stremio-addon`، `main: worker.js`، `compatibility_date: 2026-09-02`، `assets.directory: ./assets/icons` با binding `ASSETS` و `run_worker_first` |
 | `.github/workflows/deploy-worker.yml` | push به `main` → `npm ci` → `wrangler deploy --dry-run` → `wrangler secret put API_KEY` → `wrangler deploy` (Wrangler نسخه `4.128.0` پین‌شده) |
 
-> `docs/DOCUMENTATION.md` مستندات فنی کامل (منطق تابع‌به‌تابع، الگوریتم‌ها و بدهی فنی) را نگه می‌دارد. پروژه در حال حاضر فایل تست، پیکربندی lint و `Dockerfile` **ندارد** و `LICENSE` هم در ریشه مخزن موجود نیست (مقدار `license` در `package.json` برابر `Apache License 2.0` است)؛ تنها فایل نمونه تنظیمات، `.env.example` است.
+> `docs/DOCUMENTATION.md` مستندات فنی کامل (معماری، منطق تابع‌به‌تابع، الگوریتم‌ها و جدول کامل env) را نگه می‌دارد. پروژه در حال حاضر فایل تست، پیکربندی lint و `Dockerfile` **ندارد**؛ فایل `LICENSE` در ریشه مخزن موجود است (مقدار `license` در `package.json` برابر `Apache License 2.0` است) و تنها فایل نمونه تنظیمات، `.env.example` است.
 
 ---
 
@@ -290,7 +290,7 @@ http://localhost:8787/subtitles/manifest.json
 
 > مسیرهای ضروری: `/manifest.json`, `/subtitles/...`, `/download/{id}`, `/health`
 
-⚠️ توجه مهم: در نسخه Node، لینک هر زیرنویس به‌صورت `http://${SERVER_IP}:${PORT}/download/...` ساخته می‌شود؛ یعنی **scheme همیشه `http`** است و `PORT` هم حتماً در URL می‌آید. برای سرو روی `443` پشت TLS proxy، مسیر `/download/...` را در پراکسی به پورت واقعی داخل سرور/container پاس کن و `SERVER_IP` را فقط روی نام دامنه تنظیم کن. راه‌حل تمیزتر: ساخت URL از `x-forwarded-proto` + `Host` است که به‌عنوان بدهی فنی در بخش «مسائل شناخته‌شده» [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md) توضیح داده شده.
+⚠️ توجه مهم: در نسخه Node، لینک هر زیرنویس به‌صورت `http://${SERVER_IP}:${PORT}/download/...` ساخته می‌شود؛ یعنی **scheme همیشه `http`** است و `PORT` هم حتماً در URL می‌آید. برای سرو روی `443` پشت TLS proxy، مسیر `/download/...` را در پراکسی به پورت واقعی داخل سرور/container پاس کن و `SERVER_IP` را فقط روی نام دامنه تنظیم کن. راه‌حل تمیزتر: ساخت URL از `x-forwarded-proto` + `Host` است که در بخش «سرور Node.js و روت‌ها» [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md) توضیح داده شده.
 
 #### نمونه Docker (خودت بساز — در مخزن `Dockerfile` وجود ندارد)
 
@@ -593,7 +593,7 @@ GET /download/:token  (downloadProxy)
 
 Pull Requestها و Issueها برای بهبود تطبیق فصل/قسمت، سازگاری با تغییرات API سابسورس، افزودن تست و بهبود مستندات خوشحال‌کننده است.
 
-قبل از تغییر منطق استخراج، بخش‌های «نقشه ماژول‌ها» و «مسائل شناخته‌شده و بدهی فنی» در [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md) را مطالعه کنید؛ چند مورد کوچک و آماده برای شروع مشارکت آنجا فهرست شده‌اند.
+قبل از تغییر منطق استخراج، بخش‌های «نقشه ماژول‌ها» و «لایه جستجوی ترکیبی» در [docs/DOCUMENTATION.md](docs/DOCUMENTATION.md) را مطالعه کنید.
 
 ---
 
