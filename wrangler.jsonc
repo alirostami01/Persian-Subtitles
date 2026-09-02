@@ -1,0 +1,7 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "subsource-stremio-addon",
+  "main": "worker.js",
+  "compatibility_date": "2026-09-02",
+  "workers_dev": true
+}
