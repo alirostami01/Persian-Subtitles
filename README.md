@@ -18,9 +18,8 @@
   <img src="https://img.shields.io/badge/Stremio-Addon-blue?style=flat-square" alt="Stremio Addon" />
   <img src="https://img.shields.io/badge/Node.js-20.18.1%2B-green?style=flat-square" alt="Node.js" />
   <img src="https://img.shields.io/badge/Cloudflare-Workers-orange?style=flat-square" alt="Cloudflare Workers" />
-  <img src="https://img.shields.io/badge/Package-v2.0.0-purple?style=flat-square" alt="Package Version" />
-  <img src="https://img.shields.io/badge/Manifest-v1.0.0-informational?style=flat-square" alt="Manifest Version" />
-  <img src="https://img.shields.io/badge/License-ISC-yellow?style=flat-square" alt="License" />
+  <img src="https://img.shields.io/badge/Version-v1.0.0-purple?style=flat-square" alt="Version" />
+  <img src="https://img.shields.io/badge/License-Apache--2.0-yellow?style=flat-square" alt="License" />
 </p>
 
 ---
@@ -108,7 +107,7 @@
 | `wrangler.jsonc` | `name: subsource-stremio-addon`، `main: worker.js`، `compatibility_date: 2026-09-02`، `assets.directory: ./assets/icons` با binding `ASSETS` و `run_worker_first` |
 | `.github/workflows/deploy-worker.yml` | push به `main` → `npm ci` → `wrangler deploy --dry-run` → `wrangler secret put API_KEY` → `wrangler deploy` (Wrangler نسخه `4.128.0` پین‌شده) |
 
-> `docs/DOCUMENTATION.md` مستندات فنی کامل (منطق تابع‌به‌تابع، الگوریتم‌ها و بدهی فنی) را نگه می‌دارد. پروژه در حال حاضر فایل تست، پیکربندی lint و `Dockerfile` **ندارد** و `LICENSE` هم در ریشه مخزن موجود نیست (مقدار `license` در `package.json` برابر `ISC` است)؛ تنها فایل نمونه تنظیمات، `.env.example` است.
+> `docs/DOCUMENTATION.md` مستندات فنی کامل (منطق تابع‌به‌تابع، الگوریتم‌ها و بدهی فنی) را نگه می‌دارد. پروژه در حال حاضر فایل تست، پیکربندی lint و `Dockerfile` **ندارد** و `LICENSE` هم در ریشه مخزن موجود نیست (مقدار `license` در `package.json` برابر `Apache License 2.0` است)؛ تنها فایل نمونه تنظیمات، `.env.example` است.
 
 ---
 
@@ -297,7 +296,7 @@ http://localhost:8787/subtitles/manifest.json
 
 ```dockerfile
 FROM node:22-alpine
-WORKDIR /app
+WORKDIR /app   # نکته: مقدار name در package.json فعلاً «Persian Subtitles» است؛ npm این نام را برای publish نمی‌پذیرد (اجرای محلی مشکلی ندارد)
 COPY package*.json ./
 RUN npm ci --omit=dev
 COPY . .
@@ -389,9 +388,11 @@ server {
 
 ```json
 {
-  "id": "community.subtitles.persian",
+  "id": "org.alirostami.subtitles.persian",
   "version": "1.0.0",
   "name": "Persian Subtitles",
+  "author": "Ali Rostami",
+  "contactEmail": "rostami.ali@gmail.com",
   "resources": ["subtitles"],
   "types": ["movie", "series"],
   "idPrefixes": ["tt"],
@@ -598,7 +599,9 @@ Pull Requestها و Issueها برای بهبود تطبیق فصل/قسمت، �
 
 ## 📄 مجوز
 
-مقدار `license` در [`package.json`](package.json) برابر **ISC** است. در حال حاضر فایل `LICENSE` در ریشه مخزن وجود ندارد؛ اگر به متن کامل مجوز نیاز داری، به همان مقدار `ISC` در `package.json` استناد کن یا فایل `LICENSE` را اضافه کن.
+مقدار `license` در [`package.json`](package.json) برابر **Apache License 2.0** است.
+
+> فایل `LICENSE` با متن کامل هنوز در ریشه مخزن وجود ندارد؛ برای استناد رسمی می‌توانی همین فایل را با متن استاندارد Apache-2.0 اضافه کنی.
 
 ---
 

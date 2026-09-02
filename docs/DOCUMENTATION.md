@@ -3,7 +3,7 @@
 این فایل **مستندات داخلی/فنی** پروژه است و مخاطب آن برنامه‌نویسی است که می‌خواهد منطق افزونه را تغییر دهد، باگ استخراج را رفع کند یا runtime جدیدی اضافه کند.
 راهنمای نصب، استقرار و مصرف کاربر در [README.md](../README.md) است و اینجا تکرار نمی‌شود.
 
-> مبنای تمام توضیحات زیر، کد نسخه فعلی مخزن است: `package.json` نسخه `2.0.0` و `manifest.js` نسخه `1.0.0`. اگر منطق را عوض کردی، همین فایل را هم به‌روز کن.
+> مبنای تمام توضیحات زیر، کد نسخه فعلی مخزن است: `manifest.js` نسخه `1.0.0` با شناسه `org.alirostami.subtitles.persian`؛ `package.json` هم روی همان `1.0.0` هم‌نسخه شده است. اگر منطق را عوض کردی، همین فایل را هم به‌روز کن.
 
 ## فهرست
 
@@ -142,11 +142,12 @@ GET https://v3-cinemeta.strem.io/meta/series/{imdbId}.json               → { m
 
 ```js
 {
-  id: "community.subtitles.persian",
+  id: "org.alirostami.subtitles.persian",
   version: "1.0.0",
   name: "Persian Subtitles",
   author: "Ali Rostami",
-  description: "Provides Persian subtitles from the SubSource API.",
+  contactEmail: 'rostami.ali@gmail.com',
+  description: "Provides Persian subtitles from the SubSource API.\n\nAuthor: Ali Rostami  \nWebsite: alirostami.com/support \nGitHub: https://github.com/alirostami01/Persian-Subtitles/",
   resources: ["subtitles"],
   types: ["movie", "series"],
   idPrefixes: ["tt"],
@@ -156,6 +157,8 @@ GET https://v3-cinemeta.strem.io/meta/series/{imdbId}.json               → { m
 
 - `idPrefixes: ["tt"]` یعنی Stremio فقط برای محتوا با IMDb این افزونه را صدا می‌زند؛ برای سریال‌های بدون IMDb هیچ درخواستی نمی‌آید.
 - `resources: ["subtitles"]` تنها resource است؛ **catalog، meta و stream وجود ندارد**.
+- `description` عمداً چندخطی است: Stremio همین متن را در صفحه جزئیات افزونه نشان می‌دهد، پس لینک حمایت و GitHub داخل خود manifest سفر می‌کند (هر تغییر در آن = تغییر خروجی `/manifest.json`).
+- `contactEmail` بدون گیومه دوتایی نوشته شده؛ `JSON.stringify` خروجی معتبر تولید می‌کند، ولی سبک بقیه فیلدها را بهم می‌زند — یکدست‌کردنش بی‌خطر است.
 - نسخه Worker روی این آبجکت `behaviorHints.configurable: false` و `logo` را اضافه می‌کند (`getManifest(origin)`).
 
 ### config.js
@@ -426,13 +429,13 @@ addPromoTextToSubtitle(srtContent, promoText, durationSeconds, position)
 
 ۸. **`adm-zip`, `cheerio`, `axios-https-proxy-fix`, `https-proxy-agent`** در وابستگی‌ها هستند ولی در مسیر اصلی استفاده نمی‌شوند (`cheerio` هیچ‌جا import نشده؛ دو پکیج proxy هم مصرف‌کننده ندارند). `npm audit` و اندازه نصب را بی‌دلیل بزرگ می‌کنند.
 
-۹. **نبود تست، lint، Dockerfile و فایل `LICENSE`** در مخزن؛ `npm test` عمداً `exit 1` می‌کند. تنها تست موجود، اجرای دستی + `wrangler deploy --dry-run` در CI است.
+۹. **نبود تست، lint، Dockerfile و فایل `LICENSE`** در مخزن؛ `npm test` عمداً `exit 1` می‌کند. در کنارش `package.json` دو مقدار نیازمند اصلاح دارد: `name: "Persian Subtitles"` (فاصله و حرف بزرگ → `npm publish` رد می‌کند) و `license: "Apache License 2.0"` که شکل canonical آن `Apache-2.0` است و بدون فایل `LICENSE` عملاً بی‌اثر می‌ماند. تنها تست موجود، اجرای دستی + `wrangler deploy --dry-run` در CI است.
 
 ۱۰. **`cluster.on('exit')` بدون سقف restart:** اگر پروسه بلافاصله بعد از listen بمیرد (مثلاً `EADDRINUSE`)، حلقه fork/restart هر ۱ ثانیه بی‌نهایت ادامه پیدا می‌کند. یک counter با backoff افزایشی لازم است.
 
 ۱۱. **`message: 'shutdown'` بی‌مصرف** در `server.js`؛ worker آن را نمی‌فهمد و shutdown تدریجی واقعی (قطع اتصال‌های باز) انجام نمی‌شود.
 
-۱۲. **`manifest.js` بدون `logo`** → نسخه Node در Stremio آیکن پیش‌فرض دارد در حالی که نسخه Worker لوگو نشان می‌دهد (ناهمانی ظاهری بین دو runtime).
+۱۲. **`manifest.js` هنوز بدون `logo` است** → نسخه Node در Stremio آیکن پیش‌فرض دارد در حالی که نسخه Worker لوگو نشان می‌دهد (ناهمانی ظاهری بین دو runtime).
 
 ---
 
@@ -483,6 +486,7 @@ npx --yes wrangler@4.128.0 deploy --dry-run
 - [ ] تغییر فیلترهای فصل/قسمت؟ → الگوها در **دو** فایل هستند و هر دو باید یکسان بمانند؛ یک fixture از `releaseInfo` واقعی اضافه کن.
 - [ ] تغییر در `downloadProxy.js`؟ → پارسر `extractFirstSrt` و مسیر `res.send` هر دو را بررسی کن؛ type پاسخ `application/x-subrip` را حفظ کن.
 - [ ] افزودن متغیر محیطی؟ → `config.js` + `.env.example` + خواننده واقعی در کد + ستون «مصرف‌شده/مصرف‌نشده» جدول همین فایل.
-- [ ] تغییر `manifest.js`؟ → هر دو runtime از آن استفاده می‌کنند؛ `version` manifest و `version` `package.json` را با هم بفرست (هم‌اکنون `1.0.0` و `2.0.0` هستند و عمداً جدا نگه داشته شده‌اند).
+- [ ] تغییر `manifest.js`؟ → هر دو runtime از آن استفاده می‌کنند؛ `version` manifest و `package.json` اکنون هم‌اند (`1.0.0`) و بهتر است با هم bump شوند. اگر `id` را عوض کنی، کاربران باید افزونه را از نو نصب کنند (شناسه نصب در Stremio تغییر می‌کند).
+- [ ] اگر نام پکیج را لمس کردی؟ → `name: "Persian Subtitles"` به دلیل فاصله و حرف بزرگ برای `npm publish` نامعتبر است (اجرای local را نمی‌شکند); مقدار پیشنهادی: `persian-subtitles`.
 - [ ] تغییر فایل‌های `worker.js`/`manifest.js`/`wrangler.jsonc`/`package*.json`/`assets/icons/**`؟ → workflow دیپلوی اجرا می‌شود؛ `wrangler deploy --dry-run` را محلی بگیر تا CI قرمز نشود.
 - [ ] بخش‌های مرتبط در [README.md](../README.md) (ساختار پروژه، جدول مسیرها، عیب‌یابی) و همین فایل به‌روز شد؟
