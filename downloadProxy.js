@@ -1,7 +1,7 @@
-const axios = require('axios');
 const AdmZip = require('adm-zip');
 const iconv = require('iconv-lite');
 const config = require('./config');
+const { apiRequest } = require('./apiClient');
 
 const API_BASE_URL = 'https://api.subsource.net/api/v1';
 
@@ -166,7 +166,8 @@ async function downloadProxy(req, res) {
         console.log(`Proxying download for subtitle ID: ${token}`);
 
         // Fetch ZIP archive from external API with timeout configuration
-        const response = await axios.get(downloadUrl, {
+        const response = await apiRequest({
+            url: downloadUrl,
             responseType: 'arraybuffer',
             timeout: config.LONG_TIMEOUT,
             headers: { 'X-API-Key': process.env.API_KEY }
