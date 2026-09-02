@@ -7,6 +7,7 @@ const DEFAULT_TIMEOUT_MS = 60000;
 const DEFAULT_PROMO_TEXT = '❤️ 🎬با حمایت شما، توسعه افزونه ادامه پیدا می‌کند 🙏👉 helpserver.ir/x';
 const DEFAULT_PROMO_DURATION = 20;
 const DEFAULT_PROMO_POSITION = 'end';
+const PUBLIC_PREFIX = '/subtitles';
 
 const JSON_HEADERS = {
   'content-type': 'application/json; charset=utf-8',
@@ -37,9 +38,7 @@ async function fetchWithRetry(url, options = {}, retries = 3) {
     try {
       const response = await fetch(url, { ...options, signal: controller.signal });
       clearTimeout(timeout);
-      if (response.ok || ![429, 500, 502, 503, 504].includes(response.status) || attempt === retries) {
-        return response;
-      }
+      if (response.ok || ![429, 500, 502, 503, 504].includes(response.status) || attempt === retries) return response;
       lastError = new Error(`HTTP ${response.status}`);
     } catch (error) {
       clearTimeout(timeout);
@@ -58,10 +57,7 @@ async function fetchJson(url, options = {}) {
 }
 
 function apiHeaders(env) {
-  return {
-    Accept: 'application/json',
-    'X-API-Key': env.API_KEY || ''
-  };
+  return { Accept: 'application/json', 'X-API-Key': env.API_KEY || '' };
 }
 
 function parseStremioId(type, id) {
@@ -83,9 +79,7 @@ async function getMovieId(type, imdbId, season, env) {
       if (mediaName) {
         const url = `${API_BASE_URL}/movies/search?searchType=text&q=${encodeURIComponent(mediaName)}&season=${encodeURIComponent(season)}`;
         const result = await fetchJson(url, { headers });
-        if (result?.success && Array.isArray(result.data) && result.data.length) {
-          return result.data[0].movieId;
-        }
+        if (result?.success && Array.isArray(result.data) && result.data.length) return result.data[0].movieId;
       }
     } catch (error) {
       console.warn('Series name search failed:', error.message);
@@ -94,9 +88,7 @@ async function getMovieId(type, imdbId, season, env) {
 
   const url = `${API_BASE_URL}/movies/search?searchType=imdb&imdb=${encodeURIComponent(imdbId)}`;
   const result = await fetchJson(url, { headers });
-  return result?.success && Array.isArray(result.data) && result.data.length
-    ? result.data[0].movieId
-    : null;
+  return result?.success && Array.isArray(result.data) && result.data.length ? result.data[0].movieId : null;
 }
 
 function filterSeriesSubtitles(subtitles, season, episode) {
@@ -141,7 +133,7 @@ async function subtitlesHandler(type, id, env, origin) {
     return {
       subtitles: subtitles.map(sub => ({
         id: String(sub.subtitleId),
-        url: `${origin}/download/${encodeURIComponent(sub.subtitleId)}`,
+        url: `${origin}${PUBLIC_PREFIX}/download/${encodeURIComponent(sub.subtitleId)}`,
         lang: 'fas',
         title: Array.isArray(sub.releaseInfo) ? sub.releaseInfo.join(' ') : 'Persian Subtitle'
       }))
@@ -152,13 +144,8 @@ async function subtitlesHandler(type, id, env, origin) {
   }
 }
 
-function readU16(view, offset) {
-  return view.getUint16(offset, true);
-}
-
-function readU32(view, offset) {
-  return view.getUint32(offset, true);
-}
+function readU16(view, offset) { return view.getUint16(offset, true); }
+function readU32(view, offset) { return view.getUint32(offset, true); }
 
 function findEndOfCentralDirectory(bytes) {
   for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 65557); i -= 1) {
@@ -194,9 +181,7 @@ async function extractFirstSrt(zipBytes) {
     offset += 46 + fileNameLength + extraLength + commentLength;
 
     if (!fileName.toLowerCase().endsWith('.srt')) continue;
-    if (localHeaderOffset + 30 > bytes.length || readU32(view, localHeaderOffset) !== 0x04034b50) {
-      throw new Error('Invalid ZIP local file header');
-    }
+    if (localHeaderOffset + 30 > bytes.length || readU32(view, localHeaderOffset) !== 0x04034b50) throw new Error('Invalid ZIP local file header');
 
     const localNameLength = readU16(view, localHeaderOffset + 26);
     const localExtraLength = readU16(view, localHeaderOffset + 28);
@@ -225,7 +210,8 @@ function toTimestamp(ms) {
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
-  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')},${String(ms % 1000).padStart(3, '0')}`;
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(ms % 1000).padStart(3, '0')}`.replace(/^(\d{2}:\d{2}):/, '$1:')
+    .replace(/^(\d{2}:\d{2}:\d{2})$/, '$1,000');
 }
 
 function addPromoTextToSubtitle(srtContent, promoText, durationSeconds, position) {
@@ -298,12 +284,16 @@ async function downloadProxy(token, env) {
 function getManifest(origin) {
   return {
     ...manifest,
-    behaviorHints: {
-      ...(manifest.behaviorHints || {}),
-      configurable: false
-    },
-    logo: `${origin}/logo.png`
+    behaviorHints: { ...(manifest.behaviorHints || {}), configurable: false },
+    logo: `${origin}${PUBLIC_PREFIX}/logo.png`
   };
+}
+
+async function getAsset(pathname, request, env) {
+  if (!env.ASSETS) return new Response('Not Found', { status: 404 });
+  const assetUrl = new URL(request.url);
+  assetUrl.pathname = pathname;
+  return env.ASSETS.fetch(new Request(assetUrl, request));
 }
 
 async function handleRequest(request, env) {
@@ -311,15 +301,19 @@ async function handleRequest(request, env) {
   if (request.method === 'OPTIONS') return withCors(new Response(null, { status: 204 }));
   if (request.method !== 'GET') return new Response('Method Not Allowed', { status: 405 });
 
-  if (url.pathname === '/' || url.pathname === '/health') {
+  const path = url.pathname === PUBLIC_PREFIX ? '/' : url.pathname.startsWith(`${PUBLIC_PREFIX}/`) ? url.pathname.slice(PUBLIC_PREFIX.length) : null;
+  if (path === null) return new Response('Not Found', { status: 404 });
+
+  if (path === '/' || path === '/health') {
     return json({ status: 'ok', service: 'subsource-stremio-addon', runtime: 'cloudflare-workers' });
   }
-  if (url.pathname === '/manifest.json') return json(getManifest(url.origin), 200, { 'cache-control': 'public, max-age=300' });
+  if (path === '/manifest.json') return json(getManifest(url.origin), 200, { 'cache-control': 'public, max-age=300' });
+  if (path === '/logo.png') return getAsset('/logo.png', request, env);
 
-  const downloadMatch = url.pathname.match(/^\/download\/([^/]+)$/);
+  const downloadMatch = path.match(/^\/download\/([^/]+)$/);
   if (downloadMatch) return downloadProxy(decodeURIComponent(downloadMatch[1]), env);
 
-  const subtitleMatch = url.pathname.match(/^\/subtitles\/(movie|series)\/([^/]+?)(?:\.json)?$/);
+  const subtitleMatch = path.match(/^\/(movie|series)\/([^/]+?)(?:\.json)?$/);
   if (subtitleMatch) {
     const type = subtitleMatch[1];
     const id = decodeURIComponent(subtitleMatch[2]);
