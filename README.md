@@ -601,8 +601,6 @@ Pull Requestها و Issueها برای بهبود تطبیق فصل/قسمت، �
 
 مقدار `license` در [`package.json`](package.json) برابر **Apache License 2.0** است.
 
-> فایل `LICENSE` با متن کامل هنوز در ریشه مخزن وجود ندارد؛ برای استناد رسمی می‌توانی همین فایل را با متن استاندارد Apache-2.0 اضافه کنی.
-
 ---
 
 <p align="center">
