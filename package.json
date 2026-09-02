@@ -1,6 +1,6 @@
 {
-  "name": "subsource-stremio-addon",
-  "version": "2.0.0",
+  "name": "Persian Subtitles,
+  "version": "1.0.0",
   "description": "High-performance Persian subtitles add-on for Stremio with clustering support for handling thousands of concurrent users",
   "main": "server.js",
   "scripts": {
@@ -19,7 +19,7 @@
     "streaming"
   ],
   "author": "Ali Rostami",
-  "license": "ISC",
+  "license": "Apache License 2.0",
   "type": "commonjs",
   "dependencies": {
     "adm-zip": "^0.5.16",
