@@ -1,5 +1,5 @@
-const axios = require('axios');
 const config = require('./config');
+const { apiRequest } = require('./apiClient');
 
 const API_BASE_URL = 'https://api.subsource.net/api/v1';
 const PERSIAN_LANG_CODE = 'farsi_persian';
@@ -41,14 +41,19 @@ async function subtitlesHandler(args) {
             let mediaName;
             try {
                 // Fetch series metadata from Stremio's Cinemeta service
-                const metaRes = await axios.get(`https://v3-cinemeta.strem.io/meta/series/${imdbId}.json`);
+                const metaRes = await apiRequest({
+                    url: `https://v3-cinemeta.strem.io/meta/series/${imdbId}.json`
+                });
                 mediaName = metaRes.data.meta.name;
 
                 console.log(`Attempt 1 (Primary): Searching with Series Name "${mediaName}" and Season "${season}"`);
                 
                 // Search using series name and season number for better accuracy
                 const searchUrl = `${API_BASE_URL}/movies/search?searchType=text&q=${encodeURIComponent(mediaName)}&season=${season}`;
-                const movieSearch = await axios.get(searchUrl, { headers: API_HEADERS });
+                const movieSearch = await apiRequest({
+                    url: searchUrl,
+                    headers: API_HEADERS
+                });
 
                 if (movieSearch.data.success && movieSearch.data.data.length > 0) {
                     movieId = movieSearch.data.data[0].movieId;
@@ -65,7 +70,10 @@ async function subtitlesHandler(args) {
         if (!movieId) {
             console.log("Attempt 2 (Fallback): Searching with IMDb ID directly.");
             const searchUrl = `${API_BASE_URL}/movies/search?searchType=imdb&imdb=${imdbId}`;
-            const movieSearch = await axios.get(searchUrl, { headers: API_HEADERS });
+            const movieSearch = await apiRequest({
+                url: searchUrl,
+                headers: API_HEADERS
+            });
 
             if (movieSearch.data.success && movieSearch.data.data.length > 0) {
                 movieId = movieSearch.data.data[0].movieId;
@@ -80,7 +88,10 @@ async function subtitlesHandler(args) {
 
         // Fetch Persian subtitles for the identified movie/series
         const subtitlesUrl = `${API_BASE_URL}/subtitles?movieId=${movieId}&language=${PERSIAN_LANG_CODE}&sort=rating&limit=100`;
-        const subtitlesResponse = await axios.get(subtitlesUrl, { headers: API_HEADERS });
+        const subtitlesResponse = await apiRequest({
+            url: subtitlesUrl,
+            headers: API_HEADERS
+        });
 
         if (!subtitlesResponse.data.success || subtitlesResponse.data.data.length === 0) {
             console.log(`No Persian subtitles found for movieId: ${movieId}`);
