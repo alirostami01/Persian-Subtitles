@@ -3,30 +3,137 @@ const { apiRequest } = require('./apiClient');
 
 const API_BASE_URL = 'https://api.subsource.net/api/v1';
 const PERSIAN_LANG_CODE = 'farsi_persian';
+const PAGE_SIZE = 100;
+const MAX_PAGES = 20;
 
-/**
- * Fetches Persian subtitles for movies or TV series from SubSource API.
- * Implements a hybrid search strategy for better accuracy with TV series.
- * 
- * @param {Object} args - The request arguments containing type and id
- * @param {string} args.type - Type of content ('movie' or 'series')
- * @param {string} args.id - IMDB ID (for movies) or IMDB:season:episode (for series)
- * @returns {Promise<Object>} - Promise resolving to an object with subtitles array
- */
+function normalizeReleaseInfo(releaseInfo) {
+    if (!Array.isArray(releaseInfo)) return '';
+    return releaseInfo.join(' ').toUpperCase().trim();
+}
+
+function compactReleaseInfo(releaseInfo) {
+    return normalizeReleaseInfo(releaseInfo).replace(/[-._\s]+/g, '');
+}
+
+function hasToken(text, token) {
+    return new RegExp(`(^|[^A-Z0-9])${token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^A-Z0-9]|$)`, 'i').test(text);
+}
+
+function matchesEpisode(releaseInfo, season, episode) {
+    const seasonNum = Number.parseInt(season, 10);
+    const episodeNum = Number.parseInt(episode, 10);
+    if (!Number.isInteger(seasonNum) || !Number.isInteger(episodeNum)) return false;
+
+    const raw = normalizeReleaseInfo(releaseInfo);
+    const compact = compactReleaseInfo(releaseInfo);
+    const s = String(seasonNum);
+    const ss = String(seasonNum).padStart(2, '0');
+    const e = String(episodeNum);
+    const ee = String(episodeNum).padStart(2, '0');
+
+    const explicitEpisodePatterns = [
+        `S${ss}E${ee}`, `S${s}E${e}`, `S${ss}E${e}`, `S${s}E${ee}`,
+        `${s}X${ee}`, `${s}X${e}`, `${ss}X${ee}`, `${ss}X${e}`
+    ];
+    if (explicitEpisodePatterns.some(pattern => compact.includes(pattern))) return true;
+
+    const spacedPatterns = [
+        new RegExp(`\\bS\\s*0*${seasonNum}\\s*[-_. ]?\\s*E\\s*0*${episodeNum}\\b`, 'i'),
+        new RegExp(`\\b0*${seasonNum}\\s*[xX]\\s*0*${episodeNum}\\b`, 'i'),
+        new RegExp(`\\bSEASON\\s*0*${seasonNum}\\s*(?:EP(?:ISODE)?|E)\\s*0*${episodeNum}\\b`, 'i'),
+        new RegExp(`\\b0*${seasonNum}\\s*[-_. ]\\s*0*${episodeNum}\\b`, 'i')
+    ];
+    if (spacedPatterns.some(pattern => pattern.test(raw))) return true;
+
+    // SubSource often stores episode-only releases as "01", "02", etc.
+    // Because subtitles were fetched for the season-specific movieId, a standalone
+    // episode number is safe to match here and fixes releases without an "E" prefix.
+    const standaloneEpisode = new RegExp(`(?:^|[^0-9])0*${episodeNum}(?:[^0-9]|$)`);
+    if (standaloneEpisode.test(raw)) {
+        const hasOtherEpisodeMarker = /\b(?:E|EP|EPISODE)\s*0*\d+\b/i.test(raw);
+        if (!hasOtherEpisodeMarker) return true;
+    }
+
+    return false;
+}
+
+function isSeasonPack(releaseInfo, season) {
+    const seasonNum = Number.parseInt(season, 10);
+    if (!Number.isInteger(seasonNum)) return false;
+    const raw = normalizeReleaseInfo(releaseInfo);
+    const compact = compactReleaseInfo(releaseInfo);
+    const seasonPattern = new RegExp(`(?:^|[^A-Z0-9])S(?:EASON)?0*${seasonNum}(?:[^A-Z0-9]|$)`, 'i');
+    return /\b(?:COMPLETE|FULL|PACK|SEASON\s*PACK)\b/i.test(raw) &&
+        (seasonPattern.test(raw) || compact.includes(`SEASON${seasonNum}`) || compact.includes(`S${String(seasonNum).padStart(2, '0')}`));
+}
+
+function dedupeSubtitles(subtitles) {
+    const seen = new Set();
+    return subtitles.filter(sub => {
+        const id = String(sub?.subtitleId ?? '');
+        if (!id || seen.has(id)) return false;
+        seen.add(id);
+        return true;
+    });
+}
+
+async function fetchAllSubtitles(movieId, headers) {
+    const all = [];
+    const seenIds = new Set();
+
+    for (let page = 1; page <= MAX_PAGES; page += 1) {
+        const url = `${API_BASE_URL}/subtitles?movieId=${encodeURIComponent(movieId)}&language=${PERSIAN_LANG_CODE}&sort=rating&limit=${PAGE_SIZE}&page=${page}`;
+        const response = await apiRequest({ url, headers });
+        const data = response?.data?.data;
+        if (!response?.data?.success || !Array.isArray(data) || data.length === 0) break;
+
+        let newCount = 0;
+        for (const subtitle of data) {
+            const id = String(subtitle?.subtitleId ?? '');
+            if (id && !seenIds.has(id)) {
+                seenIds.add(id);
+                all.push(subtitle);
+                newCount += 1;
+            }
+        }
+
+        console.log(`SubSource subtitles page ${page}: ${data.length} received, ${newCount} new.`);
+        if (data.length < PAGE_SIZE || newCount === 0) break;
+    }
+
+    return all;
+}
+
+function selectBestMovieId(results, season) {
+    if (!Array.isArray(results) || !results.length) return null;
+    const seasonNum = Number.parseInt(season, 10);
+    const seasonText = Number.isInteger(seasonNum) ? String(seasonNum) : '';
+
+    const scored = results.map(item => {
+        let score = 0;
+        const text = JSON.stringify(item).toLowerCase();
+        if (seasonText && new RegExp(`season\\s*0*${seasonNum}\\b`).test(text)) score += 10;
+        if (seasonText && new RegExp(`\\bs${String(seasonNum).padStart(2, '0')}\\b`).test(text)) score += 8;
+        if (item?.movieId != null) score += 1;
+        return { item, score };
+    });
+
+    scored.sort((a, b) => b.score - a.score);
+    return scored[0]?.item?.movieId ?? null;
+}
+
 async function subtitlesHandler(args) {
-    console.log("Request for subtitles received for:", args.id);
+    console.log('Request for subtitles received for:', args.id);
     const { type, id } = args;
     let imdbId, season, episode;
 
-    // Validate API key configuration
     if (!process.env.API_KEY) {
-        console.error("API Key is missing from .env file.");
-        return Promise.resolve({ subtitles: [] });
+        console.error('API Key is missing from .env file.');
+        return { subtitles: [] };
     }
 
     const API_HEADERS = { 'X-API-Key': process.env.API_KEY };
 
-    // Parse ID based on content type
     if (type === 'series') {
         [imdbId, season, episode] = id.split(':');
     } else {
@@ -36,124 +143,67 @@ async function subtitlesHandler(args) {
     try {
         let movieId = null;
 
-        // Hybrid Strategy: First try precise method for series, then fallback to general method
         if (type === 'series') {
-            let mediaName;
             try {
-                // Fetch series metadata from Stremio's Cinemeta service
                 const metaRes = await apiRequest({
-                    url: `https://v3-cinemeta.strem.io/meta/series/${imdbId}.json`
+                    url: `https://v3-cinemeta.strem.io/meta/series/${encodeURIComponent(imdbId)}.json`
                 });
-                mediaName = metaRes.data.meta.name;
+                const mediaName = metaRes?.data?.meta?.name;
 
-                console.log(`Attempt 1 (Primary): Searching with Series Name "${mediaName}" and Season "${season}"`);
-                
-                // Search using series name and season number for better accuracy
-                const searchUrl = `${API_BASE_URL}/movies/search?searchType=text&q=${encodeURIComponent(mediaName)}&season=${season}`;
-                const movieSearch = await apiRequest({
-                    url: searchUrl,
-                    headers: API_HEADERS
-                });
-
-                if (movieSearch.data.success && movieSearch.data.data.length > 0) {
-                    movieId = movieSearch.data.data[0].movieId;
-                    console.log(`Success from Attempt 1. Found correct movieId: ${movieId}`);
-                } else {
-                    console.log("Attempt 1 failed. Falling back to Attempt 2.");
+                if (mediaName) {
+                    const searchUrl = `${API_BASE_URL}/movies/search?searchType=text&q=${encodeURIComponent(mediaName)}&season=${encodeURIComponent(season)}`;
+                    const movieSearch = await apiRequest({ url: searchUrl, headers: API_HEADERS });
+                    if (movieSearch?.data?.success && Array.isArray(movieSearch.data.data)) {
+                        movieId = selectBestMovieId(movieSearch.data.data, season);
+                        console.log(`Primary search selected movieId: ${movieId}`);
+                    }
                 }
-            } catch (e) {
-                console.error("Cinemeta fetch failed, falling back to Attempt 2. Error:", e.message);
-            }
-        }
-
-        // Fallback: If first method didn't find movieId or for movies, search directly by IMDb ID
-        if (!movieId) {
-            console.log("Attempt 2 (Fallback): Searching with IMDb ID directly.");
-            const searchUrl = `${API_BASE_URL}/movies/search?searchType=imdb&imdb=${imdbId}`;
-            const movieSearch = await apiRequest({
-                url: searchUrl,
-                headers: API_HEADERS
-            });
-
-            if (movieSearch.data.success && movieSearch.data.data.length > 0) {
-                movieId = movieSearch.data.data[0].movieId;
-                console.log(`Success from Attempt 2. Found movieId: ${movieId}`);
+            } catch (error) {
+                console.warn('Series name search failed, using IMDb fallback:', error.message);
             }
         }
 
         if (!movieId) {
-            console.log("Both attempts failed to find a movieId.");
-            return Promise.resolve({ subtitles: [] });
+            const searchUrl = `${API_BASE_URL}/movies/search?searchType=imdb&imdb=${encodeURIComponent(imdbId)}`;
+            const movieSearch = await apiRequest({ url: searchUrl, headers: API_HEADERS });
+            if (movieSearch?.data?.success && Array.isArray(movieSearch.data.data)) {
+                movieId = selectBestMovieId(movieSearch.data.data, season);
+            }
         }
 
-        // Fetch Persian subtitles for the identified movie/series
-        const subtitlesUrl = `${API_BASE_URL}/subtitles?movieId=${movieId}&language=${PERSIAN_LANG_CODE}&sort=rating&limit=100`;
-        const subtitlesResponse = await apiRequest({
-            url: subtitlesUrl,
-            headers: API_HEADERS
-        });
+        if (!movieId) {
+            console.log('Unable to find a SubSource movieId.');
+            return { subtitles: [] };
+        }
 
-        if (!subtitlesResponse.data.success || subtitlesResponse.data.data.length === 0) {
+        const allSubtitles = await fetchAllSubtitles(movieId, API_HEADERS);
+        if (!allSubtitles.length) {
             console.log(`No Persian subtitles found for movieId: ${movieId}`);
-            return Promise.resolve({ subtitles: [] });
+            return { subtitles: [] };
         }
 
-        let availableSubtitles = subtitlesResponse.data.data;
-
-        // Apply smart filtering for TV series to match specific episodes or season packs
+        let availableSubtitles = allSubtitles;
         if (type === 'series') {
-            const seasonNum = parseInt(season, 10);
-            const episodeNum = parseInt(episode, 10);
-            
-            // Episode matching patterns (e.g., S01E05, S1E5, 1x05)
-            const episodePatterns = [
-                `S${String(seasonNum).padStart(2, '0')}E${String(episodeNum).padStart(2, '0')}`,
-                `S${seasonNum}E${episodeNum}`,
-                `${seasonNum}x${String(episodeNum).padStart(2, '0')}`
-            ];
-            
-            // Season pack matching patterns (e.g., SEASON01, SEASON1, S01)
-            const seasonPatterns = [
-                `SEASON${String(seasonNum).padStart(2, '0')}`,
-                `SEASON${seasonNum}`,
-                `S${String(seasonNum).padStart(2, '0')}`
-            ];
-            
-            console.log(`Applying detailed filter for patterns: [${episodePatterns.join(', ')}] or season packs.`);
-            
-            // Filter subtitles based on release info patterns
-            availableSubtitles = availableSubtitles.filter(sub => {
-                if (!Array.isArray(sub.releaseInfo)) return false;
-                const releaseString = sub.releaseInfo.join(' ').toUpperCase().replace(/[-._\s]/g, '');
-                
-                // Match specific episode patterns
-                if (episodePatterns.some(p => releaseString.includes(p))) {
-                    return true;
-                }
-                
-                // Match complete season packs
-                if (releaseString.includes('COMPLETE') && seasonPatterns.some(p => releaseString.includes(p))) {
-                    return true;
-                }
-                
-                return false;
-            });
+            availableSubtitles = allSubtitles.filter(sub =>
+                matchesEpisode(sub.releaseInfo, season, episode) || isSeasonPack(sub.releaseInfo, season)
+            );
+            console.log(`Episode filter ${season}x${episode}: ${availableSubtitles.length}/${allSubtitles.length} matched.`);
         }
 
-        // Format subtitles for Stremio response
+        availableSubtitles = dedupeSubtitles(availableSubtitles);
+
         const finalSubtitles = availableSubtitles.map(sub => ({
-            id: sub.subtitleId.toString(),
-            url: `http://${config.SERVER_IP}:${config.PORT}/download/${sub.subtitleId}`,
+            id: String(sub.subtitleId),
+            url: `http://${config.SERVER_IP}:${config.PORT}/download/${encodeURIComponent(sub.subtitleId)}`,
             lang: 'fas',
-            title: Array.isArray(sub.releaseInfo) ? sub.releaseInfo.join(' ') : 'Subtitle'
+            title: Array.isArray(sub.releaseInfo) ? sub.releaseInfo.join(' ') : 'Persian Subtitle'
         }));
 
         console.log(`Successfully prepared ${finalSubtitles.length} subtitles.`);
-        return Promise.resolve({ subtitles: finalSubtitles });
-
+        return { subtitles: finalSubtitles };
     } catch (error) {
-        console.error("Error in subtitlesHandler:", error.message);
-        return Promise.resolve({ subtitles: [] });
+        console.error('Error in subtitlesHandler:', error.message);
+        return { subtitles: [] };
     }
 }
 

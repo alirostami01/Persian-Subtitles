@@ -5,167 +5,152 @@ const { apiRequest } = require('./apiClient');
 
 const API_BASE_URL = 'https://api.subsource.net/api/v1';
 
-/**
- * Parses SRT timestamp string to milliseconds.
- * Format: HH:MM:SS,mmm
- * 
- * @param {string} timestamp - Timestamp string in SRT format
- * @returns {number} - Timestamp in milliseconds
- */
 function parseTimestamp(timestamp) {
-    const parts = timestamp.trim().split(':');
-    const hours = parseInt(parts[0], 10);
-    const minutes = parseInt(parts[1], 10);
-    const secondsParts = parts[2].split(',');
-    const seconds = parseInt(secondsParts[0], 10);
-    const milliseconds = parseInt(secondsParts[1], 10);
-    
-    return ((hours * 3600) + (minutes * 60) + seconds) * 1000 + milliseconds;
+    const match = String(timestamp).trim().match(/^(\d+):(\d{2}):(\d{2})[,.](\d{1,3})/);
+    if (!match) throw new Error(`Invalid subtitle timestamp: ${timestamp}`);
+    return ((Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3])) * 1000) + Number(match[4].padEnd(3, '0'));
 }
 
-/**
- * Converts milliseconds to SRT timestamp format.
- * 
- * @param {number} ms - Time in milliseconds
- * @returns {string} - Timestamp string in SRT format (HH:MM:SS,mmm)
- */
 function toTimestamp(ms) {
+    ms = Math.max(0, Math.round(ms));
     const totalSeconds = Math.floor(ms / 1000);
     const hours = Math.floor(totalSeconds / 3600);
     const minutes = Math.floor((totalSeconds % 3600) / 60);
     const seconds = totalSeconds % 60;
-    const milliseconds = ms % 1000;
-    
-    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')},${String(milliseconds).padStart(3, '0')}`;
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')},${String(ms % 1000).padStart(3, '0')}`;
 }
 
-/**
- * Adds promotional text to subtitle content.
- * Inserts a new subtitle entry with the promo text at the specified position.
- * Color is hardcoded to yellow.
- * 
- * @param {string} srtContent - Original SRT subtitle content
- * @param {string} promoText - Text to add
- * @param {number} durationSeconds - Duration in seconds for the promo text
- * @param {string} position - 'start' or 'end'
- * @returns {string} - Modified SRT content with promo text
- */
+function stripAssTags(text) {
+    return String(text)
+        .replace(/\\N/g, '\n')
+        .replace(/\\n/g, '\n')
+        .replace(/\\h/g, ' ')
+        .replace(/\{[^}]*\}/g, '')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .trim();
+}
+
+function assTimeToMs(value) {
+    const match = String(value).trim().match(/^(\d+):(\d{1,2}):(\d{1,2})[.](\d{1,2})$/);
+    if (!match) throw new Error(`Invalid ASS timestamp: ${value}`);
+    return ((Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3])) * 1000) + Number(match[4]) * 10;
+}
+
+function assToSrt(content) {
+    const lines = String(content).replace(/^\uFEFF/, '').split(/\r?\n/);
+    const eventsStart = lines.findIndex(line => /^\s*\[Events\]\s*$/i.test(line));
+    if (eventsStart < 0) throw new Error('ASS/SSA [Events] section not found');
+
+    let format = ['Layer', 'Start', 'End', 'Style', 'Name', 'MarginL', 'MarginR', 'MarginV', 'Effect', 'Text'];
+    let inEvents = true;
+    const entries = [];
+
+    for (let i = eventsStart + 1; i < lines.length; i += 1) {
+        const line = lines[i];
+        if (/^\s*\[[^\]]+\]\s*$/.test(line)) {
+            inEvents = false;
+            break;
+        }
+        if (/^\s*Format\s*:/i.test(line)) {
+            format = line.replace(/^\s*Format\s*:/i, '').split(',').map(v => v.trim());
+            continue;
+        }
+        if (!inEvents || !/^\s*Dialogue\s*:/i.test(line)) continue;
+
+        const payload = line.replace(/^\s*Dialogue\s*:/i, '').trim();
+        const fields = payload.split(',');
+        const textIndex = format.findIndex(field => field.toLowerCase() === 'text');
+        const startIndex = format.findIndex(field => field.toLowerCase() === 'start');
+        const endIndex = format.findIndex(field => field.toLowerCase() === 'end');
+        if (startIndex < 0 || endIndex < 0) continue;
+
+        const fieldCount = format.length;
+        const text = fields.slice(Math.max(textIndex, 0), Math.max(textIndex, 0) + 1).length
+            ? fields.slice(Math.max(textIndex, 0)).join(',')
+            : fields.slice(fieldCount - 1).join(',');
+        const start = fields.slice(startIndex, startIndex + 1)[0];
+        const end = fields.slice(endIndex, endIndex + 1)[0];
+
+        try {
+            const startMs = assTimeToMs(start);
+            const endMs = assTimeToMs(end);
+            const cleanText = stripAssTags(text);
+            if (cleanText) entries.push({ startMs, endMs, text: cleanText });
+        } catch {
+            // Ignore malformed dialogue lines and keep valid events.
+        }
+    }
+
+    if (!entries.length) throw new Error('No valid ASS/SSA dialogue events found');
+    entries.sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
+    return entries.map((entry, index) => `${index + 1}\n${toTimestamp(entry.startMs)} --> ${toTimestamp(entry.endMs)}\n${entry.text}`).join('\n\n');
+}
+
 function addPromoTextToSubtitle(srtContent, promoText, durationSeconds, position) {
-    if (!promoText || !srtContent) {
-        return srtContent;
-    }
-    
-    const durationMs = durationSeconds * 1000;
-    
-    // Hardcoded yellow color in ASS format (&H00FFFF00)
-    const assColor = '&H00FFFF00';
-    const coloredPromoText = `{\\c${assColor}}${promoText}{\\c}`;
-    
-    // Parse SRT into blocks
-    const blocks = srtContent.split(/\n\s*\n/).filter(block => block.trim());
-    
-    if (blocks.length === 0) {
-        return srtContent;
-    }
-    
-    let promoBlock;
-    
+    if (!promoText || !srtContent) return srtContent;
+    const durationMs = Math.max(1, Number(durationSeconds) || 1) * 1000;
+    const coloredPromoText = `{\\c&H00FFFF00&}${promoText}{\\c}`;
+    const blocks = srtContent.replace(/\r\n/g, '\n').split(/\n\s*\n/).filter(block => block.trim());
+    if (!blocks.length) return srtContent;
+
+    const parsed = blocks.map(block => {
+        const lines = block.split('\n');
+        const timingIndex = lines.findIndex(line => line.includes('-->'));
+        if (timingIndex < 0) return null;
+        const [start, end] = lines[timingIndex].split('-->');
+        try {
+            return { block, start: parseTimestamp(start), end: parseTimestamp(end) };
+        } catch {
+            return null;
+        }
+    }).filter(Boolean);
+
+    if (!parsed.length) return srtContent;
+
     if (position === 'start') {
-        // Add at the beginning - before first subtitle
-        const firstBlock = blocks[0];
-        const lines = firstBlock.split('\n');
-        
-        // Find timing line (usually second line)
-        let timingLineIndex = 1;
-        while (timingLineIndex < lines.length && !lines[timingLineIndex].includes('-->')) {
-            timingLineIndex++;
-        }
-        
-        if (timingLineIndex < lines.length) {
-            const timingParts = lines[timingLineIndex].split('-->');
-            const endTime = parseTimestamp(timingParts[1].trim());
-            
-            // Promo text appears from 0 to durationMs
-            promoBlock = `1\n00:00:00,000 --> ${toTimestamp(durationMs)}\n${coloredPromoText}`;
-            
-            // Renumber all existing blocks
-            const renumberedBlocks = blocks.map((block, index) => {
-                const blockLines = block.split('\n');
-                if (blockLines.length > 0) {
-                    blockLines[0] = String(index + 2); // Start from 2 since promo is #1
-                }
-                return blockLines.join('\n');
-            });
-            
-            return promoBlock + '\n\n' + renumberedBlocks.join('\n\n');
-        }
-    } else {
-        // Add at the end - after last subtitle
-        const lastBlock = blocks[blocks.length - 1];
-        const lines = lastBlock.split('\n');
-        
-        // Find timing line
-        let timingLineIndex = 1;
-        while (timingLineIndex < lines.length && !lines[timingLineIndex].includes('-->')) {
-            timingLineIndex++;
-        }
-        
-        if (timingLineIndex < lines.length) {
-            const timingParts = lines[timingLineIndex].split('-->');
-            const startTime = parseTimestamp(timingParts[0].trim());
-            const endTime = parseTimestamp(timingParts[1].trim());
-            
-            // Calculate gap between subtitles to fit promo text
-            const gapMs = Math.min(3000, Math.floor((endTime - startTime) * 0.3)); // Use 30% of subtitle duration or max 3s
-            
-            // Promo starts before last subtitle ends
-            const promoStartTime = endTime - gapMs;
-            const promoEndTime = promoStartTime + durationMs;
-            
-            promoBlock = `${blocks.length + 1}\n${toTimestamp(promoStartTime)} --> ${toTimestamp(promoEndTime)}\n${coloredPromoText}`;
-            
-            return blocks.join('\n\n') + '\n\n' + promoBlock;
-        }
+        const promoEnd = Math.min(durationMs, Math.max(1, parsed[0].start));
+        const promoBlock = `1\n00:00:00,000 --> ${toTimestamp(promoEnd)}\n${coloredPromoText}`;
+        const renumbered = blocks.map((block, index) => {
+            const lines = block.split('\n');
+            if (/^\d+$/.test(lines[0].trim())) lines[0] = String(index + 2);
+            return lines.join('\n');
+        });
+        return `${promoBlock}\n\n${renumbered.join('\n\n')}`;
     }
-    
-    // Fallback: just append at end with default timing
-    const lastEndTime = blocks.length > 0 ? 
-        parseTimestamp(blocks[blocks.length - 1].split('\n').find(l => l.includes('-->')).split('-->')[1].trim()) : 
-        0;
-    
-    promoBlock = `${blocks.length + 1}\n${toTimestamp(lastEndTime)} --> ${toTimestamp(lastEndTime + durationMs)}\n${coloredPromoText}`;
-    
-    return blocks.join('\n\n') + '\n\n' + promoBlock;
+
+    const last = parsed[parsed.length - 1];
+    const promoStart = last.end;
+    const promoEnd = promoStart + durationMs;
+    const promoBlock = `${blocks.length + 1}\n${toTimestamp(promoStart)} --> ${toTimestamp(promoEnd)}\n${coloredPromoText}`;
+    return `${blocks.join('\n\n')}\n\n${promoBlock}`;
 }
 
-/**
- * Proxy handler for downloading subtitle files from SubSource API.
- * Extracts .srt files from ZIP archives, adds promotional text, and streams them to the client.
- * Designed to handle concurrent requests efficiently.
- * 
- * @param {Object} req - Express request object
- * @param {Object} res - Express response object
- */
+function decodeSubtitle(rawBuffer) {
+    let content = iconv.decode(rawBuffer, 'utf-8');
+    if (content.includes('\uFFFD')) content = iconv.decode(rawBuffer, 'win1256');
+    return content.replace(/^\uFEFF/, '');
+}
+
+function findSubtitleEntry(entries) {
+    const supported = ['.srt', '.ass', '.ssa'];
+    return entries
+        .filter(entry => !entry.isDirectory && supported.some(ext => entry.entryName.toLowerCase().endsWith(ext)))
+        .sort((a, b) => {
+            const extA = a.entryName.toLowerCase().endsWith('.srt') ? 0 : 1;
+            const extB = b.entryName.toLowerCase().endsWith('.srt') ? 0 : 1;
+            return extA - extB;
+        })[0] || null;
+}
+
 async function downloadProxy(req, res) {
+    const { token } = req.params;
+    if (!token) return res.status(400).send('No subtitle ID provided');
+    if (!process.env.API_KEY) return res.status(500).send('Server configuration error');
+
     try {
-        const { token } = req.params;
-        
-        // Validate subtitle ID parameter
-        if (!token) {
-            return res.status(400).send('No subtitle ID provided');
-        }
+        const downloadUrl = `${API_BASE_URL}/subtitles/${encodeURIComponent(token)}/download`;
+        console.log(`Proxying subtitle download: ${token}`);
 
-        // Verify API key is configured
-        if (!process.env.API_KEY) {
-            console.error("API Key is missing. Cannot process download.");
-            return res.status(500).send('Server configuration error');
-        }
-
-        // Construct download URL from SubSource API
-        const downloadUrl = `${API_BASE_URL}/subtitles/${token}/download`;
-        console.log(`Proxying download for subtitle ID: ${token}`);
-
-        // Fetch ZIP archive from external API with timeout configuration
         const response = await apiRequest({
             url: downloadUrl,
             responseType: 'arraybuffer',
@@ -173,52 +158,43 @@ async function downloadProxy(req, res) {
             headers: { 'X-API-Key': process.env.API_KEY }
         });
 
-        // Initialize ZIP parser with the downloaded data
         const zip = new AdmZip(response.data);
-        
-        // Find the first .srt (SubRip subtitle) file in the archive
-        const srtEntry = zip.getEntries().find(entry => entry.entryName.toLowerCase().endsWith('.srt'));
-
-        // Return 404 if no subtitle file is found
-        if (!srtEntry) {
-            return res.status(404).send('No .srt file found in ZIP archive');
+        const entries = zip.getEntries();
+        const subtitleEntry = findSubtitleEntry(entries);
+        if (!subtitleEntry) {
+            console.error(`Subtitle ${token}: archive contains no SRT/ASS/SSA. Entries:`, entries.map(e => e.entryName));
+            return res.status(415).send('No supported subtitle file found in ZIP archive');
         }
 
-        // Extract subtitle content as string with encoding detection
-        // Persian subtitles are often encoded in Windows-1256, not UTF-8
-        let rawBuffer = srtEntry.getData();
-        let srtContent = iconv.decode(rawBuffer, 'utf-8');
-        if (srtContent.includes('\uFFFD')) {
-            srtContent = iconv.decode(rawBuffer, 'win1256');
-            console.log(`Re-encoded subtitle from Windows-1256 to UTF-8 for: ${srtEntry.entryName}`);
+        const rawBuffer = subtitleEntry.getData();
+        const sourceExtension = subtitleEntry.entryName.toLowerCase().split('.').pop();
+        let subtitleContent = decodeSubtitle(rawBuffer);
+
+        if (sourceExtension === 'ass' || sourceExtension === 'ssa') {
+            subtitleContent = assToSrt(subtitleContent);
+            console.log(`Converted ${sourceExtension.toUpperCase()} to SRT for subtitle ${token}`);
         }
-        
-        // Add promotional text if configured
+
         if (config.SUBTITLE_PROMO_TEXT) {
             try {
-                srtContent = addPromoTextToSubtitle(
-                    srtContent,
+                subtitleContent = addPromoTextToSubtitle(
+                    subtitleContent,
                     config.SUBTITLE_PROMO_TEXT,
                     config.SUBTITLE_PROMO_DURATION,
                     config.SUBTITLE_PROMO_POSITION
                 );
-                console.log(`Added promotional text (${config.SUBTITLE_PROMO_POSITION}) to subtitle ${token}`);
             } catch (promoError) {
-                console.error('Failed to add promotional text:', promoError.message);
-                // Continue with original subtitle if promo addition fails
+                console.error(`Promo processing failed for ${token}:`, promoError.message);
             }
         }
 
-        // Set appropriate headers for subtitle content with UTF-8 encoding
         res.setHeader('Content-Type', 'application/x-subrip; charset=utf-8');
-        
-        // Stream the modified subtitle content to the client
-        res.send(srtContent);
-        console.log(`Successfully extracted and sent: ${srtEntry.entryName}`);
-
+        res.setHeader('Content-Disposition', `inline; filename="subtitle-${token}.srt"`);
+        res.send(subtitleContent);
+        console.log(`Successfully sent subtitle ${token}: ${subtitleEntry.entryName}`);
     } catch (error) {
-        console.error('Proxy Download Error:', error.message);
-        res.status(500).send('Failed to proxy subtitle download');
+        console.error(`Proxy Download Error [${token}]:`, error.message, error.response?.status || '');
+        res.status(502).send(`Failed to proxy subtitle download: ${error.message}`);
     }
 }
 

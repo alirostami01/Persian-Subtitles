@@ -8,6 +8,8 @@ const DEFAULT_PROMO_TEXT = '❤️ 🎬با حمایت شما، توسعه اف�
 const DEFAULT_PROMO_DURATION = 20;
 const DEFAULT_PROMO_POSITION = 'end';
 const PUBLIC_PREFIX = '/subtitles';
+const PAGE_SIZE = 100;
+const MAX_PAGES = 20;
 
 const JSON_HEADERS = {
   'content-type': 'application/json; charset=utf-8',
@@ -16,10 +18,7 @@ const JSON_HEADERS = {
 };
 
 function json(data, status = 200, extraHeaders = {}) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { ...JSON_HEADERS, ...extraHeaders }
-  });
+  return new Response(JSON.stringify(data), { status, headers: { ...JSON_HEADERS, ...extraHeaders } });
 }
 
 function withCors(response) {
@@ -68,6 +67,22 @@ function parseStremioId(type, id) {
   return { imdbId: id, season: null, episode: null };
 }
 
+function selectBestMovieId(results, season) {
+  if (!Array.isArray(results) || !results.length) return null;
+  const seasonNum = Number.parseInt(season, 10);
+  const scored = results.map(item => {
+    const text = JSON.stringify(item).toLowerCase();
+    let score = item?.movieId != null ? 1 : 0;
+    if (Number.isInteger(seasonNum)) {
+      if (new RegExp(`season\\s*0*${seasonNum}\\b`).test(text)) score += 10;
+      if (new RegExp(`\\bs0*${seasonNum}\\b`).test(text)) score += 8;
+    }
+    return { item, score };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0]?.item?.movieId ?? null;
+}
+
 async function getMovieId(type, imdbId, season, env) {
   const headers = apiHeaders(env);
   if (!env.API_KEY) throw new Error('API_KEY is not configured');
@@ -79,7 +94,7 @@ async function getMovieId(type, imdbId, season, env) {
       if (mediaName) {
         const url = `${API_BASE_URL}/movies/search?searchType=text&q=${encodeURIComponent(mediaName)}&season=${encodeURIComponent(season)}`;
         const result = await fetchJson(url, { headers });
-        if (result?.success && Array.isArray(result.data) && result.data.length) return result.data[0].movieId;
+        if (result?.success && Array.isArray(result.data) && result.data.length) return selectBestMovieId(result.data, season);
       }
     } catch (error) {
       console.warn('Series name search failed:', error.message);
@@ -88,31 +103,93 @@ async function getMovieId(type, imdbId, season, env) {
 
   const url = `${API_BASE_URL}/movies/search?searchType=imdb&imdb=${encodeURIComponent(imdbId)}`;
   const result = await fetchJson(url, { headers });
-  return result?.success && Array.isArray(result.data) && result.data.length ? result.data[0].movieId : null;
+  return selectBestMovieId(result?.data, season);
 }
 
-function filterSeriesSubtitles(subtitles, season, episode) {
+function normalizeReleaseInfo(releaseInfo) {
+  return Array.isArray(releaseInfo) ? releaseInfo.join(' ').toUpperCase().trim() : '';
+}
+
+function compactReleaseInfo(releaseInfo) {
+  return normalizeReleaseInfo(releaseInfo).replace(/[-._\s]+/g, '');
+}
+
+function matchesEpisode(releaseInfo, season, episode) {
   const seasonNum = Number.parseInt(season, 10);
   const episodeNum = Number.parseInt(episode, 10);
-  if (!Number.isInteger(seasonNum) || !Number.isInteger(episodeNum)) return [];
+  if (!Number.isInteger(seasonNum) || !Number.isInteger(episodeNum)) return false;
 
-  const episodePatterns = [
-    `S${String(seasonNum).padStart(2, '0')}E${String(episodeNum).padStart(2, '0')}`,
-    `S${seasonNum}E${episodeNum}`,
-    `${seasonNum}X${String(episodeNum).padStart(2, '0')}`
-  ];
-  const seasonPatterns = [
-    `SEASON${String(seasonNum).padStart(2, '0')}`,
-    `SEASON${seasonNum}`,
-    `S${String(seasonNum).padStart(2, '0')}`
-  ];
+  const raw = normalizeReleaseInfo(releaseInfo);
+  const compact = compactReleaseInfo(releaseInfo);
+  const s = String(seasonNum);
+  const ss = s.padStart(2, '0');
+  const e = String(episodeNum);
+  const ee = e.padStart(2, '0');
 
+  const explicit = [
+    `S${ss}E${ee}`, `S${s}E${e}`, `S${ss}E${e}`, `S${s}E${ee}`,
+    `${s}X${ee}`, `${s}X${e}`, `${ss}X${ee}`, `${ss}X${e}`
+  ];
+  if (explicit.some(pattern => compact.includes(pattern))) return true;
+
+  const spaced = [
+    new RegExp(`\\bS\\s*0*${seasonNum}\\s*[-_. ]?\\s*E\\s*0*${episodeNum}\\b`, 'i'),
+    new RegExp(`\\b0*${seasonNum}\\s*[xX]\\s*0*${episodeNum}\\b`, 'i'),
+    new RegExp(`\\bSEASON\\s*0*${seasonNum}\\s*(?:EP(?:ISODE)?|E)\\s*0*${episodeNum}\\b`, 'i'),
+    new RegExp(`\\b0*${seasonNum}\\s*[-_. ]\\s*0*${episodeNum}\\b`, 'i')
+  ];
+  if (spaced.some(pattern => pattern.test(raw))) return true;
+
+  // Episode-only releases such as "01" are valid because this query already
+  // targets the season-specific SubSource movieId.
+  const standaloneEpisode = new RegExp(`(?:^|[^0-9])0*${episodeNum}(?:[^0-9]|$)`);
+  const hasExplicitOtherEpisode = /\b(?:E|EP|EPISODE)\s*0*\d+\b/i.test(raw);
+  return standaloneEpisode.test(raw) && !hasExplicitOtherEpisode;
+}
+
+function isSeasonPack(releaseInfo, season) {
+  const seasonNum = Number.parseInt(season, 10);
+  if (!Number.isInteger(seasonNum)) return false;
+  const raw = normalizeReleaseInfo(releaseInfo);
+  const compact = compactReleaseInfo(releaseInfo);
+  const seasonMarker = new RegExp(`(?:^|[^A-Z0-9])S(?:EASON)?0*${seasonNum}(?:[^A-Z0-9]|$)`, 'i');
+  return /\b(?:COMPLETE|FULL|PACK|SEASON\s*PACK)\b/i.test(raw) &&
+    (seasonMarker.test(raw) || compact.includes(`SEASON${seasonNum}`) || compact.includes(`S${String(seasonNum).padStart(2, '0')}`));
+}
+
+function dedupeSubtitles(subtitles) {
+  const seen = new Set();
   return subtitles.filter(sub => {
-    if (!Array.isArray(sub.releaseInfo)) return false;
-    const release = sub.releaseInfo.join(' ').toUpperCase().replace(/[-._\s]/g, '');
-    if (episodePatterns.some(pattern => release.includes(pattern))) return true;
-    return release.includes('COMPLETE') && seasonPatterns.some(pattern => release.includes(pattern));
+    const id = String(sub?.subtitleId ?? '');
+    if (!id || seen.has(id)) return false;
+    seen.add(id);
+    return true;
   });
+}
+
+async function fetchAllSubtitles(movieId, headers) {
+  const all = [];
+  const seenIds = new Set();
+  for (let page = 1; page <= MAX_PAGES; page += 1) {
+    const url = `${API_BASE_URL}/subtitles?movieId=${encodeURIComponent(movieId)}&language=${PERSIAN_LANG_CODE}&sort=rating&limit=${PAGE_SIZE}&page=${page}`;
+    const result = await fetchJson(url, { headers });
+    const data = result?.data;
+    if (!result?.success || !Array.isArray(data) || !data.length) break;
+
+    let newCount = 0;
+    for (const subtitle of data) {
+      const id = String(subtitle?.subtitleId ?? '');
+      if (id && !seenIds.has(id)) {
+        seenIds.add(id);
+        all.push(subtitle);
+        newCount += 1;
+      }
+    }
+
+    console.log(`SubSource subtitles page ${page}: ${data.length} received, ${newCount} new.`);
+    if (data.length < PAGE_SIZE || newCount === 0) break;
+  }
+  return all;
 }
 
 async function subtitlesHandler(type, id, env, origin) {
@@ -123,13 +200,16 @@ async function subtitlesHandler(type, id, env, origin) {
     const movieId = await getMovieId(type, imdbId, season, env);
     if (!movieId) return { subtitles: [] };
 
-    const url = `${API_BASE_URL}/subtitles?movieId=${encodeURIComponent(movieId)}&language=${PERSIAN_LANG_CODE}&sort=rating&limit=100`;
-    const result = await fetchJson(url, { headers: apiHeaders(env) });
-    if (!result?.success || !Array.isArray(result.data) || !result.data.length) return { subtitles: [] };
+    const allSubtitles = await fetchAllSubtitles(movieId, apiHeaders(env));
+    if (!allSubtitles.length) return { subtitles: [] };
 
-    let subtitles = result.data;
-    if (type === 'series') subtitles = filterSeriesSubtitles(subtitles, season, episode);
+    let subtitles = allSubtitles;
+    if (type === 'series') {
+      subtitles = allSubtitles.filter(sub => matchesEpisode(sub.releaseInfo, season, episode) || isSeasonPack(sub.releaseInfo, season));
+      console.log(`Episode filter ${season}x${episode}: ${subtitles.length}/${allSubtitles.length} matched.`);
+    }
 
+    subtitles = dedupeSubtitles(subtitles);
     return {
       subtitles: subtitles.map(sub => ({
         id: String(sub.subtitleId),
@@ -148,13 +228,14 @@ function readU16(view, offset) { return view.getUint16(offset, true); }
 function readU32(view, offset) { return view.getUint32(offset, true); }
 
 function findEndOfCentralDirectory(bytes) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 65557); i -= 1) {
-    if (readU32(new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength), i) === 0x06054b50) return i;
+    if (readU32(view, i) === 0x06054b50) return i;
   }
   return -1;
 }
 
-async function extractFirstSrt(zipBytes) {
+async function extractSubtitleFile(zipBytes) {
   const bytes = new Uint8Array(zipBytes);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const eocd = findEndOfCentralDirectory(bytes);
@@ -167,79 +248,159 @@ async function extractFirstSrt(zipBytes) {
 
   let offset = centralOffset;
   const decoder = new TextDecoder('utf-8', { fatal: false });
+  const supported = ['.srt', '.ass', '.ssa'];
+  const candidates = [];
 
   for (let i = 0; i < entryCount; i += 1) {
-    if (readU32(view, offset) !== 0x02014b50) break;
+    if (offset + 46 > bytes.length || readU32(view, offset) !== 0x02014b50) break;
     const method = readU16(view, offset + 10);
     const compressedSize = readU32(view, offset + 20);
     const fileNameLength = readU16(view, offset + 28);
     const extraLength = readU16(view, offset + 30);
     const commentLength = readU16(view, offset + 32);
     const localHeaderOffset = readU32(view, offset + 42);
-    const nameBytes = bytes.slice(offset + 46, offset + 46 + fileNameLength);
-    const fileName = decoder.decode(nameBytes);
+    const nameEnd = offset + 46 + fileNameLength;
+    if (nameEnd > bytes.length) throw new Error('Invalid ZIP file name bounds');
+    const fileName = decoder.decode(bytes.slice(offset + 46, nameEnd));
     offset += 46 + fileNameLength + extraLength + commentLength;
 
-    if (!fileName.toLowerCase().endsWith('.srt')) continue;
-    if (localHeaderOffset + 30 > bytes.length || readU32(view, localHeaderOffset) !== 0x04034b50) throw new Error('Invalid ZIP local file header');
-
-    const localNameLength = readU16(view, localHeaderOffset + 26);
-    const localExtraLength = readU16(view, localHeaderOffset + 28);
-    const dataStart = localHeaderOffset + 30 + localNameLength + localExtraLength;
-    const compressed = bytes.slice(dataStart, dataStart + compressedSize);
-
-    if (method === 0) return compressed;
-    if (method === 8) {
-      const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
-      return new Uint8Array(await new Response(stream).arrayBuffer());
-    }
-    throw new Error(`Unsupported ZIP compression method: ${method}`);
+    const lower = fileName.toLowerCase();
+    const extension = supported.find(ext => lower.endsWith(ext));
+    if (!extension) continue;
+    candidates.push({ method, compressedSize, localHeaderOffset, fileName, extension });
   }
 
-  throw new Error('No .srt file found in ZIP archive');
+  candidates.sort((a, b) => (a.extension === '.srt' ? 0 : 1) - (b.extension === '.srt' ? 0 : 1));
+  const candidate = candidates[0];
+  if (!candidate) throw new Error('No supported subtitle file found in ZIP archive');
+
+  const { method, compressedSize, localHeaderOffset } = candidate;
+  if (localHeaderOffset + 30 > bytes.length || readU32(view, localHeaderOffset) !== 0x04034b50) throw new Error('Invalid ZIP local file header');
+  const localNameLength = readU16(view, localHeaderOffset + 26);
+  const localExtraLength = readU16(view, localHeaderOffset + 28);
+  const dataStart = localHeaderOffset + 30 + localNameLength + localExtraLength;
+  if (dataStart + compressedSize > bytes.length) throw new Error('Invalid ZIP compressed data bounds');
+  const compressed = bytes.slice(dataStart, dataStart + compressedSize);
+
+  if (method === 0) return { bytes: compressed, extension: candidate.extension, fileName: candidate.fileName };
+  if (method === 8) {
+    const stream = new Blob([compressed]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+    return { bytes: new Uint8Array(await new Response(stream).arrayBuffer()), extension: candidate.extension, fileName: candidate.fileName };
+  }
+  throw new Error(`Unsupported ZIP compression method: ${method}`);
+}
+
+function decodeSubtitle(bytes) {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes).replace(/^\uFEFF/, '');
+  } catch {
+    return new TextDecoder('windows-1256').decode(bytes).replace(/^\uFEFF/, '');
+  }
+}
+
+function stripAssTags(text) {
+  return String(text)
+    .replace(/\\N/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\\h/g, ' ')
+    .replace(/\{[^}]*\}/g, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .trim();
+}
+
+function assTimeToMs(value) {
+  const match = String(value).trim().match(/^(\d+):(\d{1,2}):(\d{1,2})[.](\d{1,2})$/);
+  if (!match) throw new Error(`Invalid ASS timestamp: ${value}`);
+  return ((Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3])) * 1000) + Number(match[4]) * 10;
+}
+
+function assToSrt(content) {
+  const lines = String(content).split(/\r?\n/);
+  const eventsStart = lines.findIndex(line => /^\s*\[Events\]\s*$/i.test(line));
+  if (eventsStart < 0) throw new Error('ASS/SSA [Events] section not found');
+
+  let format = ['Layer', 'Start', 'End', 'Style', 'Name', 'MarginL', 'MarginR', 'MarginV', 'Effect', 'Text'];
+  const entries = [];
+  for (let i = eventsStart + 1; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (/^\s*\[[^\]]+\]\s*$/.test(line)) break;
+    if (/^\s*Format\s*:/i.test(line)) {
+      format = line.replace(/^\s*Format\s*:/i, '').split(',').map(v => v.trim());
+      continue;
+    }
+    if (!/^\s*Dialogue\s*:/i.test(line)) continue;
+
+    const payload = line.replace(/^\s*Dialogue\s*:/i, '').trim();
+    const fields = payload.split(',');
+    const startIndex = format.findIndex(field => field.toLowerCase() === 'start');
+    const endIndex = format.findIndex(field => field.toLowerCase() === 'end');
+    const textIndex = format.findIndex(field => field.toLowerCase() === 'text');
+    if (startIndex < 0 || endIndex < 0) continue;
+
+    const textStart = textIndex >= 0 ? textIndex : format.length - 1;
+    const text = fields.slice(textStart).join(',');
+    try {
+      const startMs = assTimeToMs(fields[startIndex]);
+      const endMs = assTimeToMs(fields[endIndex]);
+      const cleanText = stripAssTags(text);
+      if (cleanText) entries.push({ startMs, endMs, text: cleanText });
+    } catch {
+      // Ignore malformed dialogue entries.
+    }
+  }
+
+  if (!entries.length) throw new Error('No valid ASS/SSA dialogue events found');
+  entries.sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
+  const toTimestamp = ms => {
+    ms = Math.max(0, Math.round(ms));
+    const totalSeconds = Math.floor(ms / 1000);
+    return `${String(Math.floor(totalSeconds / 3600)).padStart(2, '0')}:${String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, '0')}:${String(totalSeconds % 60).padStart(2, '0')},${String(ms % 1000).padStart(3, '0')}`;
+  };
+  return entries.map((entry, index) => `${index + 1}\n${toTimestamp(entry.startMs)} --> ${toTimestamp(entry.endMs)}\n${entry.text}`).join('\n\n');
 }
 
 function parseTimestamp(timestamp) {
-  const [h, m, rest] = timestamp.trim().split(':');
-  const [s, ms] = rest.split(',');
-  return ((Number(h) * 3600 + Number(m) * 60 + Number(s)) * 1000) + Number(ms);
+  const match = String(timestamp).trim().match(/^(\d+):(\d{2}):(\d{2})[,.](\d{1,3})/);
+  if (!match) throw new Error(`Invalid subtitle timestamp: ${timestamp}`);
+  return ((Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3])) * 1000) + Number(match[4].padEnd(3, '0'));
 }
 
 function toTimestamp(ms) {
+  ms = Math.max(0, Math.round(ms));
   const totalSeconds = Math.floor(ms / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')},${String(ms % 1000).padStart(3, '0')}`;
+  return `${String(Math.floor(totalSeconds / 3600)).padStart(2, '0')}:${String(Math.floor((totalSeconds % 3600) / 60)).padStart(2, '0')}:${String(totalSeconds % 60).padStart(2, '0')},${String(ms % 1000).padStart(3, '0')}`;
 }
 
 function addPromoTextToSubtitle(srtContent, promoText, durationSeconds, position) {
   if (!promoText || !srtContent) return srtContent;
-  const durationMs = durationSeconds * 1000;
+  const durationMs = Math.max(1, Number(durationSeconds) || 1) * 1000;
   const coloredPromoText = `{\\c&H00FFFF00&}${promoText}{\\c}`;
-  const blocks = srtContent.split(/\n\s*\n/).filter(block => block.trim());
+  const blocks = srtContent.replace(/\r\n/g, '\n').split(/\n\s*\n/).filter(block => block.trim());
   if (!blocks.length) return srtContent;
 
+  const parsed = blocks.map(block => {
+    const lines = block.split('\n');
+    const timingIndex = lines.findIndex(line => line.includes('-->'));
+    if (timingIndex < 0) return null;
+    const [start, end] = lines[timingIndex].split('-->');
+    try { return { block, start: parseTimestamp(start), end: parseTimestamp(end) }; } catch { return null; }
+  }).filter(Boolean);
+  if (!parsed.length) return srtContent;
+
   if (position === 'start') {
-    const promoBlock = `1\n00:00:00,000 --> ${toTimestamp(durationMs)}\n${coloredPromoText}`;
+    const promoEnd = Math.min(durationMs, Math.max(1, parsed[0].start));
+    const promoBlock = `1\n00:00:00,000 --> ${toTimestamp(promoEnd)}\n${coloredPromoText}`;
     const renumbered = blocks.map((block, index) => {
       const lines = block.split('\n');
-      lines[0] = String(index + 2);
+      if (/^\d+$/.test(lines[0].trim())) lines[0] = String(index + 2);
       return lines.join('\n');
     });
     return `${promoBlock}\n\n${renumbered.join('\n\n')}`;
   }
 
-  const last = blocks[blocks.length - 1].split('\n');
-  const timingIndex = last.findIndex(line => line.includes('-->'));
-  if (timingIndex >= 0) {
-    const [start, end] = last[timingIndex].split('-->').map(parseTimestamp);
-    const gapMs = Math.min(3000, Math.max(0, Math.floor((end - start) * 0.3)));
-    const promoStart = Math.max(0, end - gapMs);
-    const promoBlock = `${blocks.length + 1}\n${toTimestamp(promoStart)} --> ${toTimestamp(promoStart + durationMs)}\n${coloredPromoText}`;
-    return `${blocks.join('\n\n')}\n\n${promoBlock}`;
-  }
-  return srtContent;
+  const last = parsed[parsed.length - 1];
+  const promoBlock = `${blocks.length + 1}\n${toTimestamp(last.end)} --> ${toTimestamp(last.end + durationMs)}\n${coloredPromoText}`;
+  return `${blocks.join('\n\n')}\n\n${promoBlock}`;
 }
 
 async function downloadProxy(token, env) {
@@ -253,12 +414,12 @@ async function downloadProxy(token, env) {
     });
     if (!response.ok) return new Response('Failed to download subtitle archive', { status: response.status });
 
-    const srtBytes = await extractFirstSrt(await response.arrayBuffer());
-    let content;
-    try {
-      content = new TextDecoder('utf-8', { fatal: true }).decode(srtBytes);
-    } catch {
-      content = new TextDecoder('windows-1256').decode(srtBytes);
+    const archive = await response.arrayBuffer();
+    const subtitleFile = await extractSubtitleFile(archive);
+    let content = decodeSubtitle(subtitleFile.bytes);
+    if (subtitleFile.extension === '.ass' || subtitleFile.extension === '.ssa') {
+      content = assToSrt(content);
+      console.log(`Converted ${subtitleFile.extension.toUpperCase()} to SRT: ${subtitleFile.fileName}`);
     }
 
     const promoText = env.SUBTITLE_PROMO_TEXT ?? DEFAULT_PROMO_TEXT;
@@ -275,18 +436,15 @@ async function downloadProxy(token, env) {
       }
     }));
   } catch (error) {
-    console.error('Download proxy error:', error.message);
-    return new Response('Failed to proxy subtitle download', { status: 502 });
+    console.error(`Download proxy error [${token}]:`, error.message);
+    return new Response(`Failed to proxy subtitle download: ${error.message}`, { status: 502 });
   }
 }
 
 function getManifest(origin) {
   return {
     ...manifest,
-    behaviorHints: {
-      ...(manifest.behaviorHints || {}),
-      configurable: false
-    },
+    behaviorHints: { ...(manifest.behaviorHints || {}), configurable: false },
     logo: `${origin}${PUBLIC_PREFIX}/logo.png`
   };
 }
@@ -306,32 +464,18 @@ async function handleRequest(request, env) {
   const path = url.pathname === PUBLIC_PREFIX ? '/' : url.pathname.startsWith(`${PUBLIC_PREFIX}/`) ? url.pathname.slice(PUBLIC_PREFIX.length) : null;
   if (path === null) return new Response('Not Found', { status: 404 });
 
-  if (path === '/' || path === '/health') {
-    return json({ status: 'ok', service: 'subsource-stremio-addon', runtime: 'cloudflare-workers' });
-  }
+  if (path === '/' || path === '/health') return json({ status: 'ok', service: 'subsource-stremio-addon', runtime: 'cloudflare-workers' });
   if (path === '/manifest.json') return json(getManifest(url.origin), 200, { 'cache-control': 'public, max-age=300' });
   if (path === '/logo.png') return getAsset('/logo.png', request, env);
 
   const downloadMatch = path.match(/^\/download\/([^/]+)$/);
   if (downloadMatch) return downloadProxy(decodeURIComponent(downloadMatch[1]), env);
 
-  // Direct addon endpoint: /movie/:id or /series/:id
   const directSubtitleMatch = path.match(/^\/(movie|series)\/([^/]+?)(?:\.json)?$/);
-  if (directSubtitleMatch) {
-    const type = directSubtitleMatch[1];
-    const id = decodeURIComponent(directSubtitleMatch[2]);
-    return json(await subtitlesHandler(type, id, env, url.origin));
-  }
+  if (directSubtitleMatch) return json(await subtitlesHandler(directSubtitleMatch[1], decodeURIComponent(directSubtitleMatch[2]), env, url.origin));
 
-  // Standard Stremio subtitle-resource endpoint:
-  // /subtitles/movie/:id/:videoInfo.json or /subtitles/series/:id/:videoInfo.json
-  // The video metadata is not needed for SubSource lookup; only type and IMDb id matter.
   const stremioSubtitleMatch = path.match(/^\/subtitles\/(movie|series)\/([^/]+)(?:\/.*)?$/);
-  if (stremioSubtitleMatch) {
-    const type = stremioSubtitleMatch[1];
-    const id = decodeURIComponent(stremioSubtitleMatch[2]);
-    return json(await subtitlesHandler(type, id, env, url.origin));
-  }
+  if (stremioSubtitleMatch) return json(await subtitlesHandler(stremioSubtitleMatch[1], decodeURIComponent(stremioSubtitleMatch[2]), env, url.origin));
 
   return new Response('Not Found', { status: 404 });
 }
