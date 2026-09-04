@@ -8,7 +8,11 @@ const manifest = {
   "resources": ["subtitles"],
   "types": ["movie", "series"],
   "idPrefixes": ["tt"],
-  "catalogs": []
+  "catalogs": [],
+  "stremioAddonsConfig": {
+    issuer: 'https://stremio-addons.net',
+    signature: 'eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0..n3iU72IQ5Rgnqv7-wpqIAg.njQFpToX2qNihijlj1_VKDmP9R-sJpBBJpSDiq59lh1HL6Kel5P6LTXf_LdEuahNSF2mfjCD7psfWYi_faO5wWhnl-G0v9SVfq4w9lXvTxkffcQVK_kgoW87SwBazlqR.FKlC8Tg8uKppCfW3PnYPKg'
+  }
 };
 
 module.exports = manifest;
