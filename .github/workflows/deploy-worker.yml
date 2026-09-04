@@ -10,6 +10,7 @@ on:
       - 'wrangler.jsonc'
       - 'package.json'
       - 'package-lock.json'
+      - 'publishToCentral.js'
       - 'assets/icons/**'
       - '.github/workflows/deploy-worker.yml'
   workflow_dispatch:
@@ -55,3 +56,6 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Publish addon to Stremio Central Catalog
+        run: npm run publish:central
