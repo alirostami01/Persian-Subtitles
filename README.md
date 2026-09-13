@@ -24,6 +24,42 @@
 
 ---
 
+## ⚡ نصب سریع (با آدرس آماده)
+
+سریع‌ترین راه استفاده، اضافه‌کردن **نمونه عمومی آماده** این افزونه به Stremio است. فقط یکی از آدرس‌های زیر را در Stremio وارد کن — بدون کلید API، بدون `npm install` و بدون سرور:
+
+```text
+http://stremio.alirostami.com/subtitles/manifest.json
+https://stremio.alirostami.com/subtitles/manifest.json   ← توصیه‌شده
+```
+
+**روش‌های اضافه کردن:**
+
+1. **اپ Stremio (اندروید / تی‌وی / دسکتاپ):** از منوی `Addons` گزینه `Install addon` را بزن و آدرس را Paste کن.
+   اگر فرم `stremio://` دارد، این را بزن:
+   ```text
+   stremio://stremio.alirostami.com/subtitles/manifest.json
+   ```
+2. **مرورگر:** اگر آدرس manifest را باز کنی فقط JSON مانیفست را می‌بینی (این endpoint صفحه Install ندارد)؛ پس نصب را از همان داخل Stremio (روش ۱) انجام بده.
+
+**تست نصب:** یک فیلم یا سریال دارای شناسه IMDb (`tt...`) را باز کن — در بخش Subtitles باید فهرست زیرنویس‌های فارسی با نام ریلیز (مثلاً `WEB-DL 1080p`) بیاید. اگر لیست خالی بود، بخش «🐛 عیب‌یابی» پایین همین فایل را ببین.
+
+| مورد | مقدار |
+| --- | --- |
+| آدرس manifest | `https://stremio.alirostami.com/subtitles/manifest.json` |
+| شناسه افزونه | `org.alirostami.subtitles.persian` |
+| Runtime نمونه عمومی | Cloudflare Workers (با prefix `/subtitles`) |
+| بررسی سلامت سرویس | `https://stremio.alirostami.com/subtitles/health` |
+| Resources / Types | `subtitles` — `movie`, `series` (فقط شناسه `tt...`) |
+
+> ✅ روی `http` هم کار می‌کند، ولی `https` را ترجیح بده؛ چون لینک هر فایل زیرنویس و لوگو از همین origin ساخته می‌شود، با `http://` همه آن لینک‌ها هم `http` می‌شوند.
+
+> ⚠️ در نمونه عمومی (Worker) همه endpointها — `manifest.json`، `subtitles/...`، `download/...` — زیر prefix `/subtitles` سرو می‌شوند؛ اگر آن را حذف کنی (مثلاً `https://stremio.alirostami.com/manifest.json`) پاسخ `404` می‌گیری.
+
+> ℹ️ اگر می‌خواهی نسخه خودت را با **کلید API شخصی** و دامنه خودت اجرا کنی (برای محدودیت نرخ، لاگ یا تنظیمات Promo)، بخش‌های «🚀 نصب و راه‌اندازی محلی» و «☁️ استقرار (Deployment)» پایین همین فایل را ببین؛ روش `stremio://` برای سرور خودت هم در «۵. نصب در Stremio» آمده است.
+
+---
+
 ## 📖 معرفی
 
 **Persian Subtitles** یک افزونه غیررسمی برای Stremio است که با دریافت شناسه IMDb از استرمیو، فیلم یا سریال متناظر را در SubSource پیدا می‌کند و زیرنویس‌های فارسی همان محتوا را به‌صورت فایل `SRT` آماده در اختیار Stremio می‌گذارد.
@@ -269,6 +305,8 @@ stremio://localhost:8787/subtitles/manifest.json
 http://localhost:7000/manifest.json
 http://localhost:8787/subtitles/manifest.json
 ```
+
+> بدون راه‌اندازی سرور؟ لازم نیست همه مراحل بالا را اجرا کنی؛ نمونه عمومی افزونه روی Cloudflare Workers بالا است و کلید API سمت سرور تنظیم شده — فقط `https://stremio.alirostami.com/subtitles/manifest.json` را در Stremio نصب کن (بخش «⚡ نصب سریع (با آدرس آماده)» ابتدای این فایل).
 
 ---
 
